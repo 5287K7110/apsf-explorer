@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: rgb(59, 130, 246);
+  --color-primary-dark: rgb(29, 78, 216);
+  --color-success: rgb(34, 197, 94);
+  --color-warning: rgb(234, 179, 8);
+  --color-error: rgb(239, 68, 68);
+  --color-slate-900: rgb(15, 23, 42);
+  --color-slate-800: rgb(30, 41, 59);
+  --color-slate-700: rgb(51, 65, 85);
+  --color-slate-600: rgb(71, 85, 105);
+}
+
+@layer components {
+  /* Typography */
+  .text-gradient {
+    @apply bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2 font-medium transition-all duration-200 ease-out;
+  }
+
+  .btn-primary {
+    @apply bg-primary-600 text-white hover:bg-primary-700 active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply bg-slate-700 text-slate-100 hover:bg-slate-600 active:scale-95;
+  }
+
+  .btn-ghost {
+    @apply text-slate-300 hover:bg-slate-800 hover:text-slate-100;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1 text-sm;
+  }
+
+  .btn-lg {
+    @apply px-6 py-3 text-lg;
+  }
+
+  .btn-icon {
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-lg;
+  }
+
+  .btn:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  /* Cards */
+  .card {
+    @apply rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-lg transition-all duration-200;
+  }
+
+  .card-interactive:hover {
+    @apply border-slate-600 bg-slate-850 shadow-xl;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold;
+  }
+
+  .badge-success {
+    @apply bg-success-400/20 text-success-400;
+  }
+
+  .badge-error {
+    @apply bg-error-400/20 text-error-400;
+  }
+
+  .badge-warning {
+    @apply bg-warning-400/20 text-warning-400;
+  }
+
+  .badge-info {
+    @apply bg-primary-400/20 text-primary-400;
+  }
+
+  /* Progress bar */
+  .progress-bar {
+    @apply h-2 overflow-hidden rounded-full bg-slate-700;
+  }
+
+  .progress-fill {
+    @apply h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-all duration-500 ease-out;
+  }
+
+  /* Timeline */
+  .timeline-item {
+    @apply relative pl-8 pb-8;
+  }
+
+  .timeline-item::before {
+    content: '';
+    @apply absolute left-0 top-2 h-4 w-4 rounded-full border-2 border-slate-700 bg-slate-900;
+  }
+
+  .timeline-item.active::before {
+    @apply border-primary-500 bg-primary-500;
+  }
+
+  .timeline-item.completed::before {
+    @apply border-success-500 bg-success-500;
+  }
+
+  .timeline-item::after {
+    content: '';
+    @apply absolute left-2 top-6 h-16 w-0.5 bg-slate-700;
+  }
+
+  .timeline-item:last-child::after {
+    @apply hidden;
+  }
+
+  /* Animations */
+  @keyframes fadeIn {
+    from {
+      @apply opacity-0 translate-y-2;
+    }
+    to {
+      @apply opacity-100 translate-y-0;
+    }
+  }
+
+  @keyframes slideIn {
+    from {
+      @apply translate-x-2 opacity-0;
+    }
+    to {
+      @apply translate-x-0 opacity-100;
+    }
+  }
+
+  @keyframes pulse-slow {
+    0%, 100% {
+      @apply opacity-100;
+    }
+    50% {
+      @apply opacity-50;
+    }
+  }
+
+  .fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+
+  /* Loading states */
+  .skeleton {
+    @apply animate-pulse rounded bg-slate-700;
+  }
+
+  .skeleton-text {
+    @apply h-4 rounded;
+  }
+
+  .skeleton-circle {
+    @apply rounded-full;
+  }
+
+  /* Scroll */
+  ::-webkit-scrollbar {
+    @apply h-2 w-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-lg bg-slate-700 hover:bg-slate-600;
+  }
+
+  /* Form elements */
+  .input {
+    @apply rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-slate-100 placeholder-slate-500 transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20;
+  }
+
+  /* Responsive utilities */
+  @screen md {
+    .hide-mobile {
+      @apply block;
+    }
+  }
+
+  @screen sm {
+    .hide-mobile {
+      @apply hidden;
+    }
+  }
+}
+
+/* Smooth transitions */
+* {
+  @apply transition-colors duration-200;
+}
