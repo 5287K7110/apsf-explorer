@@ -15,7 +15,7 @@ export interface ExecuteRequest {
   roles: string[];
   goal?: string;
   context?: Record<string, unknown>;
-  mode?: 'cli-full' | 'cli-lite' | 'api'; // Execution mode
+  mode?: 'cli-full' | 'cli-lite' | 'api' | 'apsf-run'; // Execution mode
 }
 
 export interface ExecuteResponse {

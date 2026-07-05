@@ -3,6 +3,7 @@ import { ExecuteRequest } from '../types/index.js';
 import { CLIFullExecutor } from '../executors/cli-full-executor.js';
 import { CLILiteExecutor } from '../executors/cli-lite-executor.js';
 import { APIExecutor } from '../executors/api-executor.js';
+import { APSFRunBridge } from './apsf-run-bridge.service.js';
 import { EventEmitter } from 'events';
 import { execSync } from 'child_process';
 
@@ -55,6 +56,8 @@ export class ExecutionModeRouter extends EventEmitter {
         return new CLILiteExecutor(config);
       case 'api':
         return new APIExecutor(config);
+      case 'apsf-run':
+        return new APSFRunBridge();
       default:
         throw new Error(`Unknown mode: ${mode}`);
     }
@@ -69,6 +72,11 @@ export class ExecutionModeRouter extends EventEmitter {
     // CLI モード: claude/codex/gemini CLI が必要
     if (this.isCliAvailable()) {
       available.push('cli-full', 'cli-lite');
+    }
+
+    // 実 APSF Framework モード: APSF_ROOT が必要
+    if (new APSFRunBridge().isAvailable()) {
+      available.push('apsf-run');
     }
 
     // API モード: 今は常に false（将来実装）

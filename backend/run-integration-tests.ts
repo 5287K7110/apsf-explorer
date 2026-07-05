@@ -22,6 +22,8 @@ const BASE = `http://localhost:${PORT}`;
 const WS_URL = `ws://localhost:${PORT}`;
 const JWT_SECRET = 'integration-test-secret';
 const FIXTURE_DIR = resolve(__dirname, '__tests__/fixtures');
+// 実 APSF Framework の場所（このマシンの実物。他環境では APSF_ROOT で指定）
+const APSF_ROOT_DEFAULT = 'C:/Users/PC_User/PRJ/ai-problem-solving-framework';
 
 interface TestResult {
   name: string;
@@ -73,6 +75,8 @@ function startBackend(): Promise<void> {
         // Executor (CLI-FULL/LITE) 用の実プロセス CLI フィクスチャ
         APSF_CLI_OVERRIDE: `python "${resolve(FIXTURE_DIR, 'fake_cli.py')}"`,
         RUNS_DIR: resolve(__dirname, 'runs'),
+        // 実 APSF Framework（存在する環境でのみ apsf-run テストが実行される）
+        APSF_ROOT: process.env.APSF_ROOT || APSF_ROOT_DEFAULT,
       },
     });
     backend.stdout?.on('data', (d) => process.env.DEBUG_BACKEND && console.log(`[backend] ${d}`));
@@ -366,6 +370,68 @@ async function main(): Promise<void> {
     let threw = false;
     try { router.setMode('bogus' as any); } catch { threw = true; }
     assert(threw, 'setMode(bogus) should throw');
+  });
+
+  // ---- 実 APSF Framework 結合（apsf-run mode） ----
+
+  const { existsSync: apsfExists } = await import('fs');
+  const apsfRoot = process.env.APSF_ROOT || APSF_ROOT_DEFAULT;
+
+  if (apsfExists(resolve(apsfRoot, 'runs'))) {
+    let knownRun = '';
+
+    await test('APSF: GET /api/runs/apsf lists real framework runs', async () => {
+      const r = await fetch(`${BASE}/api/runs/apsf`, { headers: authHeader() });
+      const body = await r.json();
+      assert(r.status === 200 && body.available === true, `unexpected: ${JSON.stringify(body).slice(0, 200)}`);
+      assert(Array.isArray(body.runs) && body.runs.length > 0, 'no runs found');
+      assert(body.runs.every((n: string) => /^\d{4}-\d{2}-\d{2}/.test(n)), 'non-run entry in list');
+      knownRun = body.runs[body.runs.length - 1];
+    });
+
+    await test('APSF: GET /api/runs/apsf/:id/phase runs real `apsf next`', async () => {
+      assert(knownRun, 'no known run from previous test');
+      const r = await fetch(`${BASE}/api/runs/apsf/${encodeURIComponent(knownRun)}/phase`, {
+        headers: authHeader(),
+      });
+      const body = await r.json();
+      assert(r.status === 200, `status ${r.status}: ${JSON.stringify(body).slice(0, 200)}`);
+      // 実フェーズトークン（PLAN_NEEDED / BUILD_NEEDED / COMPLETE 等）
+      assert(/^[A-Z_]+$/.test(body.phase), `unexpected phase: ${body.phase}`);
+    });
+
+    await test('APSF: execute (apsf-run mode) with nonexistent run → error event', async () => {
+      const msg = await executeAndWaitFor(
+        { runId: 'no-such-run-xyz', provider: 'claude', command: 'plan', roles: [], mode: 'apsf-run' },
+        (m) => m.type === 'error' && m.runId === 'no-such-run-xyz',
+        30000
+      );
+      assert(msg.data.error, 'error payload missing');
+      // backend がクラッシュしていないこと
+      const r = await fetch(`${BASE}/health`);
+      assert(r.ok, 'backend crashed after apsf-run error');
+    });
+
+    await test('APSF: execution-modes lists apsf-run as available', async () => {
+      const r = await fetch(`${BASE}/api/runs/execution-modes`, { headers: authHeader() });
+      const body = await r.json();
+      assert(body.available.includes('apsf-run'), `available: ${JSON.stringify(body.available)}`);
+    });
+  } else {
+    console.log(`⏭️  SKIP  APSF framework tests (not found at ${apsfRoot})`);
+  }
+
+  await test('APSFRunBridge: unavailable without APSF_ROOT', async () => {
+    const saved = process.env.APSF_ROOT;
+    delete process.env.APSF_ROOT;
+    try {
+      const { APSFRunBridge } = await import('./src/services/apsf-run-bridge.service.js');
+      const bridge = new APSFRunBridge();
+      assert(bridge.isAvailable() === false, 'should be unavailable');
+      assert(bridge.listRuns().length === 0, 'listRuns should be empty');
+    } finally {
+      if (saved) process.env.APSF_ROOT = saved;
+    }
   });
 
   stopBackend();

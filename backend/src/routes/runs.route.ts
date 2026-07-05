@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { APSFBridgeService } from '../services/apsf-bridge.service.js';
+import { APSFRunBridge } from '../services/apsf-run-bridge.service.js';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
 import { executionEvents } from '../services/event-bus.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
@@ -8,6 +9,7 @@ import { ExecutionMode } from '../types/execution-mode.js';
 
 const router = Router();
 const apsf = new APSFBridgeService();
+const apsfRun = new APSFRunBridge();
 const modeRouter = new ExecutionModeRouter(
   (process.env.EXECUTION_MODE as ExecutionMode) || 'cli-full'
 );
@@ -103,6 +105,38 @@ router.post('/:id/cancel', (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/runs/apsf
+ * 実 APSF Framework の run 一覧（APSF_ROOT 未設定なら available: false）
+ */
+router.get('/apsf', (req: Request, res: Response) => {
+  const available = apsfRun.isAvailable();
+  res.json({
+    available,
+    apsfRoot: process.env.APSF_ROOT || null,
+    runs: available ? apsfRun.listRuns() : [],
+  });
+});
+
+/**
+ * GET /api/runs/apsf/:id/phase
+ * 実 APSF のフェーズ検出（apsf next <run> --phase-only を実行）
+ */
+router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const phase = await apsfRun.getPhase(req.params.id);
+    res.json({ runId: req.params.id, phase });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * GET /api/providers
  * Get available providers
  */
@@ -129,6 +163,7 @@ router.get('/execution-modes', (req: Request, res: Response) => {
       'cli-full': 'Full execution with artifact storage',
       'cli-lite': 'Lightweight execution without storage',
       'api': 'API mode (coming in v2.0)',
+      'apsf-run': 'Real APSF framework (run dirs + phase detection + wrappers)',
     },
   });
 });
