@@ -161,8 +161,17 @@ export class APSFRunBridge extends EventEmitter {
 
       console.log(`[APSF-RUN] ${script} ${request.runId}${args.includes('-DryRun') ? ' (DryRun)' : ''}`);
 
+      // APSF ラッパーは claude/codex CLI のセッション認証で動く（手動実行時と同じ）。
+      // backend の .env 由来の API キー（プレースホルダー含む）が継承されると
+      // CLI がセッション認証より優先して使い "Invalid API key" になるため除去する
+      const childEnv = { ...process.env };
+      delete childEnv.ANTHROPIC_API_KEY;
+      delete childEnv.OPENAI_API_KEY;
+      delete childEnv.GEMINI_API_KEY;
+
       const child = spawn('powershell', args, {
         cwd: this.apsfRoot,
+        env: childEnv,
         timeout: 30 * 60 * 1000, // auto-loop は長時間になり得る
       });
 
