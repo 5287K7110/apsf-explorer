@@ -135,6 +135,59 @@ async function testErrorHandling(): Promise<void> {
   }
 }
 
+/**
+ * 実 AI 実行テスト: claude -p に実際にプロンプトを処理させる
+ * CLIFullExecutor と同じフラグ・stdin 渡しで、本物の実行経路を検証する
+ */
+async function testRealExecution(claudePath: string | null): Promise<void> {
+  const start = Date.now();
+  const name = 'Claude CLI real prompt execution (claude -p)';
+
+  if (!process.env.RUN_REAL_CLI) {
+    record(name, 'SKIP', 0, 'opt-in with RUN_REAL_CLI=1 (costs tokens)');
+    return;
+  }
+  if (!claudePath) {
+    record(name, 'SKIP', 0, 'Claude CLI not detected');
+    return;
+  }
+
+  try {
+    const child = spawn(
+      'claude',
+      [
+        '-p',
+        '--output-format', 'text',
+        '--no-session-persistence',
+        '--disable-slash-commands',
+        '--permission-mode', 'dontAsk',
+      ],
+      { shell: true, timeout: 120000 }
+    );
+    child.stdin?.write('Reply with exactly this token and nothing else: APSF-OK');
+    child.stdin?.end();
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => (stdout += d.toString()));
+    child.stderr?.on('data', (d) => (stderr += d.toString()));
+
+    const code = await new Promise<number | null>((res, reject) => {
+      child.on('close', res);
+      child.on('error', reject);
+    });
+
+    if (code === 0 && stdout.includes('APSF-OK')) {
+      record(name, 'PASS', Date.now() - start, `real AI responded: ${stdout.trim().slice(0, 60)}`);
+    } else {
+      record(name, 'FAIL', Date.now() - start,
+        `exit=${code}, stdout=${stdout.slice(0, 100)}, stderr=${stderr.slice(0, 100)}`);
+    }
+  } catch (e) {
+    record(name, 'FAIL', Date.now() - start, e instanceof Error ? e.message : String(e));
+  }
+}
+
 async function main(): Promise<void> {
   console.log('🚀 CLI Integration Tests — real PATH detection, real CLI invocation\n');
 
@@ -150,6 +203,9 @@ async function main(): Promise<void> {
 
   // Error handling
   await testErrorHandling();
+
+  // 実 AI 実行テスト（コスト・時間がかかるためオプトイン: RUN_REAL_CLI=1）
+  await testRealExecution(claude);
 
   // Results
   const pass = results.filter((r) => r.status === 'PASS').length;

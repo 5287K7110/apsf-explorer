@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,11 +10,17 @@ import { ExecutionModeConfig } from '../types/execution-mode.js';
  * - Artifact を保存
  * - Tool output を記録
  * - 完全なログを保持
+ *
+ * NOTE:
+ * - prompt は argv ではなく stdin で渡す（shell 経由 spawn でのインジェクション防止）
+ * - permission mode は env APSF_PERMISSION_MODE で設定（デフォルト: acceptEdits）
+ *   自律実行で全権限が必要な場合のみ明示的に bypassPermissions を設定すること
+ * - テストでは env APSF_CLI_OVERRIDE で CLI コマンドを差し替え可能
  */
 export class CLIFullExecutor extends EventEmitter {
   private config: ExecutionModeConfig;
   private runsDir: string;
-  private activeProcesses: Map<string, NodeJS.Process> = new Map();
+  private activeProcesses: Map<string, ChildProcess> = new Map();
 
   constructor(config: ExecutionModeConfig) {
     super();
@@ -28,38 +34,43 @@ export class CLIFullExecutor extends EventEmitter {
     try {
       const cliCommand = this.selectCli(request.provider);
       const prompt = await this.buildPrompt(request);
+      const permissionMode = process.env.APSF_PERMISSION_MODE || 'acceptEdits';
 
+      // 実 claude CLI (2.x) で有効なフラグのみを使用
+      // （旧実装の --tools / --max-turns / restrictive は存在せず即エラーだった）
       const args = [
         '-p',
-        '--tools',
-        'Bash,Edit,Glob,Grep,Read,Write,mcp__filesystem__*',
-        '--permission-mode',
-        'bypassPermissions',
-        '--output-format',
-        'text',
+        '--output-format', 'text',
         '--no-session-persistence',
-        '--max-turns',
-        String(this.config.maxTurns),
         '--disable-slash-commands',
-        prompt,
+        '--allowedTools', 'Bash,Edit,Glob,Grep,Read,Write',
+        '--permission-mode', permissionMode,
       ];
 
       console.log(
-        `[CLI-FULL] Spawning ${cliCommand} (Artifact will be saved)`
+        `[CLI-FULL] Spawning ${cliCommand} (permission: ${permissionMode}, artifacts: on)`
       );
 
-      const process = spawn(cliCommand, args, {
+      // shell: true は Windows の .cmd シム対応。prompt は stdin 経由なので
+      // ユーザー入力がシェルコマンドラインに混入することはない
+      const child = spawn(cliCommand, args, {
+        shell: true,
         timeout: this.config.timeout,
       });
 
-      this.activeProcesses.set(processId, process);
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+
+      this.activeProcesses.set(processId, child);
 
       // 🔹 Artifact を保存
-      await this.handleProcessWithArtifactSave(process, request, processId);
+      await this.handleProcessWithArtifactSave(child, request, processId);
     } catch (error) {
-      this.emit('error', {
+      // 'event' として emit（'error' emit は未処理時にプロセスをクラッシュさせる）
+      this.emit('event', {
         type: 'error',
         runId: request.runId,
+        timestamp: Date.now(),
         data: {
           error: error instanceof Error ? error.message : 'Unknown error',
         },
@@ -71,18 +82,19 @@ export class CLIFullExecutor extends EventEmitter {
    * 🔹 Artifact を保存
    */
   private async handleProcessWithArtifactSave(
-    process: NodeJS.Process,
+    child: ChildProcess,
     request: ExecuteRequest,
     processId: string
   ): Promise<void> {
     let output = '';
+    let errOutput = '';
     const artifacts: any[] = [];
 
-    process.stdout?.on('data', (data) => {
+    child.stdout?.on('data', (data) => {
       const chunk = data.toString();
       output += chunk;
 
-      // Artifact を検出（Claude CLI のネイティブ形式）
+      // Artifact を検出
       const artifactMatch = chunk.match(/\[ARTIFACT:([^\]]+)\]/);
       if (artifactMatch) {
         artifacts.push({
@@ -97,12 +109,16 @@ export class CLIFullExecutor extends EventEmitter {
         type: 'progress',
         runId: request.runId,
         timestamp: Date.now(),
-        data: { message: chunk },
+        data: { message: chunk, mode: 'cli-full' },
       } as StreamEvent);
     });
 
+    child.stderr?.on('data', (data) => {
+      errOutput += data.toString();
+    });
+
     return new Promise((resolve, reject) => {
-      process.on('close', (code) => {
+      child.on('close', (code) => {
         this.activeProcesses.delete(processId);
 
         if (code === 0) {
@@ -114,18 +130,22 @@ export class CLIFullExecutor extends EventEmitter {
             runId: request.runId,
             timestamp: Date.now(),
             data: {
+              mode: 'cli-full',
               artifactCount: artifacts.length,
+              exitCode: code,
               message: 'Execution completed with artifacts saved',
             },
           } as StreamEvent);
 
           resolve();
         } else {
-          reject(new Error(`CLI exited with code ${code}`));
+          reject(new Error(
+            `CLI exited with code ${code}${errOutput ? `: ${errOutput.slice(0, 300)}` : ''}`
+          ));
         }
       });
 
-      process.on('error', reject);
+      child.on('error', reject);
     });
   }
 
@@ -140,7 +160,6 @@ export class CLIFullExecutor extends EventEmitter {
     const runDir = path.join(this.runsDir, runId);
     const buildPath = path.join(runDir, 'build.md');
 
-    // ディレクトリが存在しなければ作成
     if (!fs.existsSync(runDir)) {
       fs.mkdirSync(runDir, { recursive: true });
     }
@@ -163,6 +182,11 @@ export class CLIFullExecutor extends EventEmitter {
   }
 
   private selectCli(provider: string): string {
+    // テスト/カスタム環境用オーバーライド（例: "python /path/fake_cli.py"）
+    if (process.env.APSF_CLI_OVERRIDE) {
+      return process.env.APSF_CLI_OVERRIDE;
+    }
+
     const clis: Record<string, string> = {
       claude: 'claude',
       codex: 'codex',
@@ -173,7 +197,6 @@ export class CLIFullExecutor extends EventEmitter {
   }
 
   private async buildPrompt(request: ExecuteRequest): Promise<string> {
-    // plan.md を読んで prompt を組み立て
     return `Execute command: ${request.command}\nProvider: ${request.provider}\nRoles: ${request.roles.join(
       ', '
     )}\nGoal: ${request.goal || 'No goal specified'}`;

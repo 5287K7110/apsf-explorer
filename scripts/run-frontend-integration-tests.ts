@@ -14,7 +14,9 @@ import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.TEST_PORT || 3001);
+// デフォルトはテスト専用ポート。開発用 backend (3001) は env が異なるため
+// 再利用すると誤った結果になる。3001 を明示的に使う場合は TEST_PORT=3001
+const PORT = Number(process.env.TEST_PORT || 3210);
 const BASE = `http://localhost:${PORT}`;
 const WS_URL = `ws://localhost:${PORT}`;
 const BACKEND_DIR = resolve(__dirname, '../backend');

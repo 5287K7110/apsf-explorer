@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
 import { ExecutionModeConfig } from '../types/execution-mode.js';
@@ -7,11 +7,15 @@ import { ExecutionModeConfig } from '../types/execution-mode.js';
  * CLI Lite Executor
  * - Artifact を保存しない（軽量）
  * - 結果は一時的（WebSocket で配信するだけ）
- * - 低コスト運用
+ * - 低コスト・制限付き権限（dontAsk: 許可外ツールは自動拒否）
+ *
+ * NOTE:
+ * - prompt は argv ではなく stdin で渡す（shell 経由 spawn でのインジェクション防止）
+ * - テストでは env APSF_CLI_OVERRIDE で CLI コマンドを差し替え可能
  */
 export class CLILiteExecutor extends EventEmitter {
   private config: ExecutionModeConfig;
-  private activeProcesses: Map<string, NodeJS.Process> = new Map();
+  private activeProcesses: Map<string, ChildProcess> = new Map();
 
   constructor(config: ExecutionModeConfig) {
     super();
@@ -25,37 +29,40 @@ export class CLILiteExecutor extends EventEmitter {
       const cliCommand = this.selectCli(request.provider);
       const prompt = await this.buildPrompt(request);
 
+      // 実 claude CLI (2.x) で有効なフラグのみを使用
+      // 読み取り系ツールのみ許可 + dontAsk（許可外は自動拒否）で「制限モード」を実現
+      // （旧実装の --permission-mode restrictive は存在しない値だった）
       const args = [
         '-p',
-        '--tools',
-        'Bash,Edit,Glob,Grep,Read,Write',
-        '--permission-mode',
-        'restrictive', // ← 制限モード
-        '--output-format',
-        'text',
+        '--output-format', 'text',
         '--no-session-persistence',
-        '--max-turns',
-        String(this.config.maxTurns),
         '--disable-slash-commands',
-        prompt,
+        '--allowedTools', 'Read,Grep,Glob',
+        '--permission-mode', 'dontAsk',
       ];
 
       console.log(
-        `[CLI-LITE] Spawning ${cliCommand} (No artifact save, low cost)`
+        `[CLI-LITE] Spawning ${cliCommand} (no artifact save, restricted tools)`
       );
 
-      const process = spawn(cliCommand, args, {
+      const child = spawn(cliCommand, args, {
+        shell: true,
         timeout: this.config.timeout,
       });
 
-      this.activeProcesses.set(processId, process);
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+
+      this.activeProcesses.set(processId, child);
 
       // 🔹 Artifact を保存しない
-      await this.handleProcessLite(process, request, processId);
+      await this.handleProcessLite(child, request, processId);
     } catch (error) {
-      this.emit('error', {
+      // 'event' として emit（'error' emit は未処理時にプロセスをクラッシュさせる）
+      this.emit('event', {
         type: 'error',
         runId: request.runId,
+        timestamp: Date.now(),
         data: {
           error: error instanceof Error ? error.message : 'Unknown error',
         },
@@ -67,22 +74,28 @@ export class CLILiteExecutor extends EventEmitter {
    * 🔹 軽量処理（保存なし）
    */
   private async handleProcessLite(
-    process: NodeJS.Process,
+    child: ChildProcess,
     request: ExecuteRequest,
     processId: string
   ): Promise<void> {
-    process.stdout?.on('data', (data) => {
+    let errOutput = '';
+
+    child.stdout?.on('data', (data) => {
       // WebSocket で配信するだけ（保存しない）
       this.emit('event', {
         type: 'progress',
         runId: request.runId,
         timestamp: Date.now(),
-        data: { message: data.toString() },
+        data: { message: data.toString(), mode: 'cli-lite' },
       } as StreamEvent);
     });
 
+    child.stderr?.on('data', (data) => {
+      errOutput += data.toString();
+    });
+
     return new Promise((resolve, reject) => {
-      process.on('close', (code) => {
+      child.on('close', (code) => {
         this.activeProcesses.delete(processId);
 
         if (code === 0) {
@@ -93,21 +106,29 @@ export class CLILiteExecutor extends EventEmitter {
             timestamp: Date.now(),
             data: {
               mode: 'cli-lite',
+              exitCode: code,
               message: 'Execution completed (no artifacts saved)',
             },
           } as StreamEvent);
 
           resolve();
         } else {
-          reject(new Error(`CLI exited with code ${code}`));
+          reject(new Error(
+            `CLI exited with code ${code}${errOutput ? `: ${errOutput.slice(0, 300)}` : ''}`
+          ));
         }
       });
 
-      process.on('error', reject);
+      child.on('error', reject);
     });
   }
 
   private selectCli(provider: string): string {
+    // テスト/カスタム環境用オーバーライド（例: "python /path/fake_cli.py"）
+    if (process.env.APSF_CLI_OVERRIDE) {
+      return process.env.APSF_CLI_OVERRIDE;
+    }
+
     const clis: Record<string, string> = {
       claude: 'claude',
       codex: 'codex',

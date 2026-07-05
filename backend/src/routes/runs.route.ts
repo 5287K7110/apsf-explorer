@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { APSFBridgeService } from '../services/apsf-bridge.service.js';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
+import { executionEvents } from '../services/event-bus.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
-import { ExecuteRequest } from '../types/index.js';
+import { ExecuteRequest, StreamEvent } from '../types/index.js';
 import { ExecutionMode } from '../types/execution-mode.js';
 
 const router = Router();
@@ -32,15 +33,6 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       return;
     }
 
-    if (!apsf.isProviderAvailable(provider)) {
-      res.status(400).json({
-        error: `Provider ${provider} is not available`,
-        availableProviders: apsf.getAvailableProviders(),
-      });
-      return;
-    }
-
-    // 🔹 Mode を指定可能
     const executeRequest: ExecuteRequest = {
       runId,
       command,
@@ -48,18 +40,39 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       roles: roles || [],
       goal,
       context,
-      mode: mode || 'cli-full', // デフォルト: CLI-FULL
+      mode,
     };
 
-    await apsf.execute(executeRequest);
+    if (mode) {
+      // 🔹 Execution Mode Router 経由（CLI-FULL / CLI-LITE / API）
+      // CLI モードは CLI 自身が認証を持つため API キー検証は不要
+      const executor = modeRouter.getExecutor(executeRequest);
+      executor.on('event', (event: StreamEvent) => {
+        executionEvents.emit('event', event);
+      });
+      // 実行は非同期継続。進捗/完了/エラーは WebSocket で配信される
+      executor.execute(executeRequest).catch(() => {
+        // エラーは executor 内で event として emit 済み
+      });
+    } else {
+      // レガシー経路: APSF python framework（API キー必須）
+      if (!apsf.isProviderAvailable(provider)) {
+        res.status(400).json({
+          error: `Provider ${provider} is not available`,
+          availableProviders: apsf.getAvailableProviders(),
+        });
+        return;
+      }
+      await apsf.execute(executeRequest);
+    }
 
     res.json({
       runId,
       status: 'executing',
       provider,
-      mode: mode || 'cli-full',
+      mode: mode || 'legacy-bridge',
       message: `Executing ${command} with ${provider} (mode: ${
-        mode || 'cli-full'
+        mode || 'legacy-bridge'
       })`,
     });
   } catch (error) {

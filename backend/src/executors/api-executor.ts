@@ -19,9 +19,11 @@ export class APIExecutor extends EventEmitter {
   async execute(request: ExecuteRequest): Promise<void> {
     console.log(`[API] Mode not yet implemented`);
 
-    this.emit('error', {
+    // 'event' として emit（'error' emit は未処理時にプロセスをクラッシュさせる）
+    this.emit('event', {
       type: 'error',
       runId: request.runId,
+      timestamp: Date.now(),
       data: {
         error: 'API mode coming in v2.0',
         note: 'Please use cli-full or cli-lite mode',

@@ -70,6 +70,9 @@ function startBackend(): Promise<void> {
         // 実 python + 実フィクスチャモジュールで本物の実行経路を通す
         APSF_PYTHON_PATH: 'python',
         APSF_CLI_PATH: FIXTURE_DIR,
+        // Executor (CLI-FULL/LITE) 用の実プロセス CLI フィクスチャ
+        APSF_CLI_OVERRIDE: `python "${resolve(FIXTURE_DIR, 'fake_cli.py')}"`,
+        RUNS_DIR: resolve(__dirname, 'runs'),
       },
     });
     backend.stdout?.on('data', (d) => process.env.DEBUG_BACKEND && console.log(`[backend] ${d}`));
@@ -99,6 +102,30 @@ function stopBackend(): void {
   } else {
     backend.kill('SIGTERM');
   }
+}
+
+/** WS を開き、（何も送らずに）条件を満たすブロードキャストイベントを待つ */
+function waitForEvent(predicate: (msg: any) => boolean, timeoutMs = 10000): Promise<any> {
+  return new Promise((res, reject) => {
+    const ws = new WebSocket(WS_URL);
+    const received: string[] = [];
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error(`Timeout waiting for broadcast. Received: ${received.join(', ') || '(none)'}`));
+    }, timeoutMs);
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        received.push(msg.type);
+        if (predicate(msg)) {
+          clearTimeout(timer);
+          ws.close();
+          res(msg);
+        }
+      } catch { /* ignore */ }
+    });
+    ws.on('error', (err) => { clearTimeout(timer); reject(err); });
+  });
 }
 
 /** WS を開き、execute を送り、条件を満たすイベントを待つ */
@@ -132,6 +159,10 @@ function executeAndWaitFor(
 
 async function main(): Promise<void> {
   console.log('🚀 Backend Integration Tests — REAL backend/src/index.ts\n');
+
+  // 前回実行の artifact を除去（stale pass 防止）
+  const { rmSync } = await import('fs');
+  rmSync(resolve(__dirname, 'runs'), { recursive: true, force: true });
 
   await startBackend();
   console.log(`✅ Real backend started on port ${PORT}\n`);
@@ -172,25 +203,65 @@ async function main(): Promise<void> {
     assert(body.modes && body.current, 'modes/current missing');
   });
 
-  await test('POST execute (CLI-FULL mode) via REST returns executing', async () => {
+  await test('POST execute (CLI-FULL mode): real executor runs → complete via WS', async () => {
+    // WS を先に開いて REST 実行の complete イベントを待ち受ける（Router 配線の実証）
+    const wsEvents = waitForEvent(
+      (m) => m.type === 'complete' && m.runId === 'rest-full-1' && m.data?.mode === 'cli-full'
+    );
     const r = await fetch(`${BASE}/api/runs/rest-full-1/execute`, {
       method: 'POST',
       headers: authHeader(),
-      body: JSON.stringify({ command: 'goal', provider: 'anthropic', roles: ['judge'], mode: 'cli-full' }),
+      body: JSON.stringify({ command: 'plan', provider: 'claude', roles: ['judge'], mode: 'cli-full' }),
     });
     const body = await r.json();
     assert(r.status === 200 && body.status === 'executing' && body.mode === 'cli-full',
       `unexpected: ${r.status} ${JSON.stringify(body)}`);
+    const evt = await wsEvents;
+    assert(evt.data.artifactCount >= 1, `artifactCount: ${evt.data.artifactCount}`);
   });
 
-  await test('POST execute (CLI-LITE mode) via REST returns executing', async () => {
+  await test('CLI-FULL mode: artifacts saved to runs/<id>/build.md', async () => {
+    const { existsSync, readFileSync } = await import('fs');
+    const buildPath = resolve(__dirname, 'runs/rest-full-1/build.md');
+    assert(existsSync(buildPath), `${buildPath} not created`);
+    const content = readFileSync(buildPath, 'utf-8');
+    assert(content.includes('fake-artifact-1'), 'artifact ID missing in build.md');
+  });
+
+  await test('POST execute (CLI-LITE mode): real executor runs → complete via WS', async () => {
+    const wsEvents = waitForEvent(
+      (m) => m.type === 'complete' && m.runId === 'rest-lite-1' && m.data?.mode === 'cli-lite'
+    );
     const r = await fetch(`${BASE}/api/runs/rest-lite-1/execute`, {
       method: 'POST',
       headers: authHeader(),
-      body: JSON.stringify({ command: 'goal', provider: 'anthropic', roles: ['judge'], mode: 'cli-lite' }),
+      body: JSON.stringify({ command: 'plan', provider: 'claude', roles: ['judge'], mode: 'cli-lite', goal: 'quick check' }),
     });
     const body = await r.json();
     assert(r.status === 200 && body.mode === 'cli-lite', `unexpected: ${JSON.stringify(body)}`);
+    await wsEvents;
+  });
+
+  await test('CLI-LITE mode: no artifacts saved', async () => {
+    const { existsSync } = await import('fs');
+    assert(!existsSync(resolve(__dirname, 'runs/rest-lite-1')), 'cli-lite should not save artifacts');
+  });
+
+  await test('WS execute (CLI-FULL mode) with failing CLI → error event', async () => {
+    const msg = await executeAndWaitFor(
+      { runId: 'ws-mode-fail', provider: 'claude', command: 'plan', roles: [], mode: 'cli-full', goal: 'fail' },
+      (m) => m.type === 'error' && m.runId === 'ws-mode-fail'
+    );
+    assert(String(msg.data.error).includes('exited with code 1'), `error: ${msg.data.error}`);
+  });
+
+  await test('API mode: returns error event (not implemented, no crash)', async () => {
+    await executeAndWaitFor(
+      { runId: 'ws-api-1', provider: 'claude', command: 'plan', roles: [], mode: 'api' },
+      (m) => m.type === 'error' && m.runId === 'ws-api-1'
+    );
+    const r = await fetch(`${BASE}/health`);
+    assert(r.ok, 'backend crashed after api-mode execution');
   });
 
   await test('POST execute rejects unavailable provider (400)', async () => {
@@ -298,6 +369,31 @@ async function main(): Promise<void> {
   });
 
   stopBackend();
+
+  // ---- セキュリティ: 本番起動ガード ----
+
+  await test('Production without JWT_SECRET refuses to start (exit 1)', async () => {
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      NODE_ENV: 'production',
+      PORT: '3199',
+    };
+    delete env.JWT_SECRET;
+    const code = await new Promise<number | null>((res, reject) => {
+      // cwd を .env のないディレクトリにして dotenv 経由の JWT_SECRET 供給を防ぐ
+      const child = spawn(`npx tsx "${resolve(__dirname, 'src/index.ts')}"`, {
+        cwd: FIXTURE_DIR,
+        shell: true,
+        env,
+      });
+      const t = setTimeout(() => {
+        child.kill();
+        reject(new Error('did not exit within 10s — started without JWT_SECRET?'));
+      }, 10000);
+      child.on('close', (c) => { clearTimeout(t); res(c); });
+    });
+    assert(code === 1, `expected exit 1, got ${code}`);
+  });
 
   // ---- Results ----
   const pass = results.filter((r) => r.status === 'PASS').length;

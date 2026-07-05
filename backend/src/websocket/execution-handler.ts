@@ -1,17 +1,28 @@
 import WebSocket from 'ws';
 import { APSFBridgeService } from '../services/apsf-bridge.service.js';
+import { ExecutionModeRouter } from '../services/execution-mode-router.js';
+import { executionEvents } from '../services/event-bus.js';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
+import { ExecutionMode } from '../types/execution-mode.js';
 
 /**
  * WebSocket ハンドラー: リアルタイム実行進捗配信
+ *
+ * 実行経路:
+ * - request.mode あり → ExecutionModeRouter が選択した Executor（CLI-FULL / CLI-LITE / API）
+ * - request.mode なし → APSFBridgeService（APSF python framework 経由・レガシー経路）
  */
 export class ExecutionHandler {
   private apsf: APSFBridgeService;
+  private modeRouter: ExecutionModeRouter;
   private activeConnections: Map<string, WebSocket> = new Map();
   private connectionCounter = 0;
 
   constructor() {
     this.apsf = new APSFBridgeService();
+    this.modeRouter = new ExecutionModeRouter(
+      (process.env.EXECUTION_MODE as ExecutionMode) || 'cli-full'
+    );
     this.setupEventListeners();
   }
 
@@ -67,8 +78,17 @@ export class ExecutionHandler {
         })
       );
 
-      // APSF 実行
-      await this.apsf.execute(request);
+      if (request.mode) {
+        // 🔹 Execution Mode Router 経由（CLI-FULL / CLI-LITE / API）
+        const executor = this.modeRouter.getExecutor(request);
+        executor.on('event', (event: StreamEvent) => {
+          executionEvents.emit('event', event);
+        });
+        await executor.execute(request);
+      } else {
+        // レガシー経路: APSF python framework
+        await this.apsf.execute(request);
+      }
 
       // イベントはリスナーから自動配信
 
@@ -94,15 +114,19 @@ export class ExecutionHandler {
    * APSF イベントをすべてのクライアントに配信
    */
   private setupEventListeners(): void {
-    this.apsf.on('event', (event: StreamEvent) => {
-      const message = JSON.stringify(event);
+    // Bridge（レガシー経路）のイベント
+    this.apsf.on('event', (event: StreamEvent) => this.broadcast(event));
+    // Executor / REST 経由のイベント（共有バス）
+    executionEvents.on('event', (event: StreamEvent) => this.broadcast(event));
+  }
 
-      // すべてのアクティブ接続に配信
-      for (const socket of this.activeConnections.values()) {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(message);
-        }
+  /** すべてのアクティブ接続に配信 */
+  private broadcast(event: StreamEvent): void {
+    const message = JSON.stringify(event);
+    for (const socket of this.activeConnections.values()) {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(message);
       }
-    });
+    }
   }
 }

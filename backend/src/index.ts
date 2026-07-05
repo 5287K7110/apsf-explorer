@@ -8,6 +8,12 @@ import { ExecutionHandler } from './websocket/execution-handler.js';
 
 dotenv.config();
 
+// 本番では JWT_SECRET を必須にする（デフォルト鍵での運用を防止）
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('❌ FATAL: JWT_SECRET must be set in production.');
+  process.exit(1);
+}
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({

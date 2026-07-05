@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Backend integration tests (real backend/src)
+        run: npx tsx run-integration-tests.ts
+        working-directory: backend
+        env:
+          JWT_SECRET: ci-test-secret
+
+      - name: Frontend integration tests (real backend + real WS events)
+        run: npx tsx scripts/run-frontend-integration-tests.ts
+
+      # CLI テスト: CI に claude/codex は無いため detection は SKIP になる
+      # （SKIP は FAIL ではない — エラーハンドリング系は実行される）
+      - name: CLI integration tests
+        run: npx tsx run-cli-integration-tests.ts
+        working-directory: backend
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests (real vite + real Chromium)
+        run: npm run test:e2e
