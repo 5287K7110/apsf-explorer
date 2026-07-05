@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Play, FolderGit2, CircleDot, Loader2 } from 'lucide-react';
 import { apsfAPI, ApsfCommand } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
+// フェーズ定義は backend と共有（apsf-native/phases.ts が単一の正）
+import { isHumanPhase } from '../../backend/src/services/apsf-native/phases';
 
 /**
  * APSF Run Panel — 実 APSF Framework の run を操作する
@@ -12,15 +14,9 @@ import { wsClient } from '../utils/wsClient';
  * - WebSocket progress/complete/error をライブログ表示
  */
 
-const HUMAN_PHASES = [
-  'GOAL_NEEDED', 'SETUP_NEEDED', 'TASK_NEEDED', 'IMPROVE_PLAN_OPTIONAL',
-  'IMPROVE_NEEDED', 'VERIFY_OPTIONAL', 'RESULT_NEEDED',
-  'TRANSCRIPT_RECOMMENDED', 'COMPLETE',
-];
-
 function phaseColor(phase: string): string {
   if (phase === 'COMPLETE') return 'text-green-400 border-green-700 bg-green-900/30';
-  if (HUMAN_PHASES.includes(phase)) return 'text-amber-400 border-amber-700 bg-amber-900/30';
+  if (isHumanPhase(phase)) return 'text-amber-400 border-amber-700 bg-amber-900/30';
   return 'text-blue-400 border-blue-700 bg-blue-900/30';
 }
 
@@ -227,7 +223,7 @@ export const APSFRunPanel: React.FC = () => {
                 >
                   <RefreshCw size={14} />
                 </button>
-                {HUMAN_PHASES.includes(phase) && (
+                {isHumanPhase(phase) && (
                   <span className="text-xs text-amber-400">human-owned phase</span>
                 )}
               </div>

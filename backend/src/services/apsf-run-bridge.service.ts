@@ -1,29 +1,27 @@
-import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
 import { PhaseDetector, resolveRunDir, PhaseInfo } from './apsf-native/phase-detector.js';
+import { NativeApsfExecutor } from './apsf-native/native-executor.js';
 
 /**
  * APSFRunBridge: 実 APSF Framework (ai-problem-solving-framework) との通信層
  *
- * 実 APSF のプロトコル（scripts/ から追跡した実仕様）:
- * - 状態     : <APSF_ROOT>/runs/<run-name>/ ディレクトリ（goal.md, plan.md, build.md...）
- * - フェーズ  : `apsf next <run> --phase-only` → PLAN_NEEDED / BUILD_NEEDED / ... / COMPLETE
- * - 実行     : ps1 ラッパー（apsf-claude-act.ps1, apsf-codex-build.ps1 等）が
- *              プロンプトを組み立て claude/codex CLI に流し込む
- * - ループ    : apsf-auto-loop.ps1 が human フェーズまで PLAN→BUILD→REVIEW を反復
- *
- * 旧 APSFBridgeService の `python -m apsf.cli execute --format json` は
- * 実 APSF に存在しない架空のプロトコルだったため、本クラスが実仕様で置き換える。
+ * TS ネイティブ実装（ps1/PowerShell 依存なし・クロスプラットフォーム）:
+ * - 状態       : <APSF_ROOT>/runs/<run-name>/ ディレクトリ（goal.md, plan.md, build.md...）
+ * - フェーズ検出: apsf-native/phase-detector.ts（`apsf next` と parity 検証済み 29/29）
+ * - 実行       : apsf-native/native-executor.ts
+ *                （prompt = `apsf act --print-prompt` → claude/codex spawn →
+ *                  保存 = `apsf write-phase --stdin`。ps1 ラッパーの置き換え）
+ * - ループ      : NativeApsfExecutor.executeLoop（apsf-auto-loop.ps1 の置き換え）
  *
  * 設定:
  * - APSF_ROOT: 実 APSF リポジトリのパス（未設定なら isAvailable() が false）
  * - APSF_BIN : apsf CLI コマンド名（デフォルト 'apsf'）
  */
 export class APSFRunBridge extends EventEmitter {
-  private activeProcesses: Map<string, ChildProcess> = new Map();
+  private activeExecutors: Map<string, NativeApsfExecutor> = new Map();
 
   // NOTE: コンストラクタでキャッシュしない。ESM の import ホイスティングにより
   // モジュールレベルのインスタンス化が dotenv.config() より先に走るため、
@@ -36,12 +34,11 @@ export class APSFRunBridge extends EventEmitter {
     return process.env.APSF_BIN || 'apsf';
   }
 
-  /** 実 APSF が利用可能か（APSF_ROOT が実在し scripts/ を持つか） */
+  /** 実 APSF が利用可能か（APSF_ROOT の runs/ が実在するか） */
   isAvailable(): boolean {
     return (
       this.apsfRoot.length > 0 &&
-      fs.existsSync(path.join(this.apsfRoot, 'runs')) &&
-      fs.existsSync(path.join(this.apsfRoot, 'scripts'))
+      fs.existsSync(path.join(this.apsfRoot, 'runs'))
     );
   }
 
@@ -97,146 +94,52 @@ export class APSFRunBridge extends EventEmitter {
   }
 
   /**
-   * command → 実 APSF ラッパースクリプトのマッピング
-   * （apsf-auto-loop.ps1 のデフォルト構成に準拠）
-   */
-  private selectScript(request: ExecuteRequest): { script: string; extraArgs: string[] } {
-    const provider = request.provider === 'codex' ? 'codex' : 'claude';
-    switch (request.command) {
-      case 'plan':
-      case 'review':
-      case 'judge':
-        return provider === 'codex'
-          ? { script: request.command === 'plan' ? 'apsf-codex-plan.ps1' : 'apsf-codex-review.ps1', extraArgs: [] }
-          : { script: 'apsf-claude-act.ps1', extraArgs: [] };
-      case 'build':
-      case 'retry':
-        return provider === 'codex'
-          ? { script: 'apsf-codex-build.ps1', extraArgs: [] }
-          : { script: 'apsf-claude-build.ps1', extraArgs: [] };
-      case 'full-cycle':
-        // auto-loop のデフォルトは codex plan/build。claude 指定時はラッパーを差し替える
-        return provider === 'claude'
-          ? {
-              script: 'apsf-auto-loop.ps1',
-              extraArgs: [
-                '-PlanScript', 'apsf-claude-act.ps1',
-                '-BuildScript', 'apsf-claude-build.ps1',
-              ],
-            }
-          : { script: 'apsf-auto-loop.ps1', extraArgs: [] };
-      default:
-        throw new Error(`Unknown command: ${request.command}`);
-    }
-  }
-
-  /**
-   * 実 APSF ラッパーを実行し、進捗を StreamEvent で配信する
+   * 実 APSF run を実行し、進捗を StreamEvent で配信する（TS ネイティブ・ps1 不使用）
+   *
    * - request.runId = 実 APSF の run 名
-   * - request.context.dryRun = true でラッパーの -DryRun（プロンプト組み立てのみ、AI 実行なし）
+   * - command 'full-cycle' → human フェーズまで auto-loop
+   * - それ以外（plan/build/review 等）→ 現在フェーズを 1 回だけ実行
+   * - request.context.dryRun = true でプロンプト組み立てのみ（AI 実行なし）
    */
   async execute(request: ExecuteRequest): Promise<void> {
-    const processId = `${request.runId}-${Date.now()}`;
-
     try {
       if (!this.isAvailable()) {
         throw new Error('APSF framework not available. Set APSF_ROOT to the framework repository.');
       }
 
-      const { script, extraArgs } = this.selectScript(request);
-      const scriptPath = path.join(this.apsfRoot, 'scripts', script);
-      if (!fs.existsSync(scriptPath)) {
-        throw new Error(`APSF wrapper script not found: ${scriptPath}`);
+      const provider = request.provider === 'codex' ? 'codex' : 'claude';
+      const dryRun = Boolean(request.context && (request.context as any).dryRun);
+      const isLoop = request.command === 'full-cycle';
+
+      console.log(
+        `[APSF-RUN] native ${isLoop ? 'auto-loop' : 'single-phase'} ${request.runId}${dryRun ? ' (DryRun)' : ''}`
+      );
+
+      const executor = new NativeApsfExecutor(this.apsfRoot, this.apsfBin);
+      this.activeExecutors.set(request.runId, executor);
+      executor.on('event', (event: StreamEvent) => this.emit('event', event));
+
+      const opts = { runId: request.runId, provider, dryRun } as const;
+      let phase: string;
+      let detail: Record<string, unknown> = {};
+
+      if (isLoop) {
+        const result = await executor.executeLoop(opts);
+        phase = result.phase;
+        detail = { cycles: result.cycles, stopReason: result.stopReason };
+      } else {
+        phase = await executor.executePhase(opts);
       }
 
-      const args = [
-        '-NoProfile',
-        '-ExecutionPolicy', 'Bypass',
-        '-File', scriptPath,
-        request.runId,
-        ...extraArgs,
-      ];
-      if (request.context && (request.context as any).dryRun) {
-        args.push('-DryRun');
-      }
-
-      console.log(`[APSF-RUN] ${script} ${request.runId}${args.includes('-DryRun') ? ' (DryRun)' : ''}`);
-
-      // APSF ラッパーは claude/codex CLI のセッション認証で動く（手動実行時と同じ）。
-      // backend の .env 由来の API キー（プレースホルダー含む）が継承されると
-      // CLI がセッション認証より優先して使い "Invalid API key" になるため除去する
-      const childEnv = { ...process.env };
-      delete childEnv.ANTHROPIC_API_KEY;
-      delete childEnv.OPENAI_API_KEY;
-      delete childEnv.GEMINI_API_KEY;
-
-      const child = spawn('powershell', args, {
-        cwd: this.apsfRoot,
-        env: childEnv,
-        timeout: 30 * 60 * 1000, // auto-loop は長時間になり得る
-      });
-
-      this.activeProcesses.set(processId, child);
-
-      child.stdout?.on('data', (data) => {
-        this.emit('event', {
-          type: 'progress',
-          runId: request.runId,
-          timestamp: Date.now(),
-          data: {
-            message: data.toString(),
-            mode: 'apsf-run',
-            script,
-            provider: request.provider,
-          },
-        } as StreamEvent);
-      });
-
-      child.stderr?.on('data', (data) => {
-        this.emit('event', {
-          type: 'log',
-          runId: request.runId,
-          timestamp: Date.now(),
-          data: { message: data.toString(), stream: 'stderr' },
-        } as StreamEvent);
-      });
-
-      child.on('error', (err) => {
-        this.activeProcesses.delete(processId);
-        this.emit('event', {
-          type: 'error',
-          runId: request.runId,
-          timestamp: Date.now(),
-          data: { error: `Failed to spawn APSF wrapper: ${err.message}` },
-        } as StreamEvent);
-      });
-
-      child.on('close', async (code) => {
-        this.activeProcesses.delete(processId);
-
-        if (code === 0) {
-          // 実行後の実フェーズを取得して complete に含める
-          let phase = 'UNKNOWN';
-          try {
-            phase = await this.getPhase(request.runId);
-          } catch { /* phase 取得失敗は complete 自体を妨げない */ }
-
-          this.emit('event', {
-            type: 'complete',
-            runId: request.runId,
-            timestamp: Date.now(),
-            data: { mode: 'apsf-run', script, exitCode: code, phase },
-          } as StreamEvent);
-        } else {
-          this.emit('event', {
-            type: 'error',
-            runId: request.runId,
-            timestamp: Date.now(),
-            data: { error: `APSF wrapper exited with code ${code}`, script },
-          } as StreamEvent);
-        }
-      });
+      this.activeExecutors.delete(request.runId);
+      this.emit('event', {
+        type: 'complete',
+        runId: request.runId,
+        timestamp: Date.now(),
+        data: { mode: 'apsf-run', engine: 'native', exitCode: 0, phase, ...detail },
+      } as StreamEvent);
     } catch (error) {
+      this.activeExecutors.delete(request.runId);
       this.emit('event', {
         type: 'error',
         runId: request.runId,
@@ -248,13 +151,9 @@ export class APSFRunBridge extends EventEmitter {
     }
   }
 
-  /** 実行中プロセスをキャンセル */
+  /** 実行中の処理をキャンセル */
   cancelExecution(runId: string): void {
-    for (const [processId, child] of this.activeProcesses.entries()) {
-      if (processId.startsWith(runId)) {
-        child.kill();
-        this.activeProcesses.delete(processId);
-      }
-    }
+    this.activeExecutors.get(runId)?.cancel();
+    this.activeExecutors.delete(runId);
   }
 }

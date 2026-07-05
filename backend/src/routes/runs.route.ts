@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { APSFBridgeService } from '../services/apsf-bridge.service.js';
+import { execSync } from 'child_process';
 import { APSFRunBridge } from '../services/apsf-run-bridge.service.js';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
 import { executionEvents } from '../services/event-bus.js';
@@ -8,7 +8,6 @@ import { ExecuteRequest, StreamEvent } from '../types/index.js';
 import { ExecutionMode } from '../types/execution-mode.js';
 
 const router = Router();
-const apsf = new APSFBridgeService();
 const apsfRun = new APSFRunBridge();
 const modeRouter = new ExecutionModeRouter(
   (process.env.EXECUTION_MODE as ExecutionMode) || 'cli-full'
@@ -35,6 +34,7 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       return;
     }
 
+    const effectiveMode = mode || process.env.EXECUTION_MODE || 'cli-full';
     const executeRequest: ExecuteRequest = {
       runId,
       command,
@@ -42,40 +42,26 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       roles: roles || [],
       goal,
       context,
-      mode,
+      mode: effectiveMode,
     };
 
-    if (mode) {
-      // 🔹 Execution Mode Router 経由（CLI-FULL / CLI-LITE / API）
-      // CLI モードは CLI 自身が認証を持つため API キー検証は不要
-      const executor = modeRouter.getExecutor(executeRequest);
-      executor.on('event', (event: StreamEvent) => {
-        executionEvents.emit('event', event);
-      });
-      // 実行は非同期継続。進捗/完了/エラーは WebSocket で配信される
-      executor.execute(executeRequest).catch(() => {
-        // エラーは executor 内で event として emit 済み
-      });
-    } else {
-      // レガシー経路: APSF python framework（API キー必須）
-      if (!apsf.isProviderAvailable(provider)) {
-        res.status(400).json({
-          error: `Provider ${provider} is not available`,
-          availableProviders: apsf.getAvailableProviders(),
-        });
-        return;
-      }
-      await apsf.execute(executeRequest);
-    }
+    // Execution Mode Router 経由（cli-full / cli-lite / api / apsf-run）
+    // CLI 系モードは CLI 自身がセッション認証を持つため API キー検証は不要
+    const executor = modeRouter.getExecutor(executeRequest);
+    executor.on('event', (event: StreamEvent) => {
+      executionEvents.emit('event', event);
+    });
+    // 実行は非同期継続。進捗/完了/エラーは WebSocket で配信される
+    executor.execute(executeRequest).catch(() => {
+      // エラーは executor 内で event として emit 済み
+    });
 
     res.json({
       runId,
       status: 'executing',
       provider,
-      mode: mode || 'legacy-bridge',
-      message: `Executing ${command} with ${provider} (mode: ${
-        mode || 'legacy-bridge'
-      })`,
+      mode: effectiveMode,
+      message: `Executing ${command} with ${provider} (mode: ${effectiveMode})`,
     });
   } catch (error) {
     res.status(500).json({
@@ -91,7 +77,7 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
 router.post('/:id/cancel', (req: Request, res: Response) => {
   try {
     const runId = req.params.id;
-    apsf.cancelExecution(runId);
+    apsfRun.cancelExecution(runId);
 
     res.json({
       runId,
@@ -137,11 +123,19 @@ router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/providers
- * Get available providers
+ * GET /api/runs/providers
+ * 利用可能なプロバイダー（PATH 上の実 CLI 検出。CLI はセッション認証を持つ）
  */
 router.get('/providers', (req: Request, res: Response) => {
-  const providers = apsf.getAvailableProviders();
+  const checkCmd = process.platform === 'win32' ? 'where' : 'which';
+  const providers = ['claude', 'codex', 'gemini'].filter((cli) => {
+    try {
+      execSync(`${checkCmd} ${cli}`, { stdio: 'pipe' });
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
   res.json({
     providers,

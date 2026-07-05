@@ -1,5 +1,4 @@
 import WebSocket from 'ws';
-import { APSFBridgeService } from '../services/apsf-bridge.service.js';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
 import { executionEvents } from '../services/event-bus.js';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
@@ -8,18 +7,16 @@ import { ExecutionMode } from '../types/execution-mode.js';
 /**
  * WebSocket ハンドラー: リアルタイム実行進捗配信
  *
- * 実行経路:
- * - request.mode あり → ExecutionModeRouter が選択した Executor（CLI-FULL / CLI-LITE / API）
- * - request.mode なし → APSFBridgeService（APSF python framework 経由・レガシー経路）
+ * 実行経路: ExecutionModeRouter が mode に応じた Executor を選択
+ * （cli-full / cli-lite / api / apsf-run。mode 未指定は EXECUTION_MODE のデフォルト）
  */
 export class ExecutionHandler {
-  private apsf: APSFBridgeService;
   private modeRouter: ExecutionModeRouter;
   private activeConnections: Map<string, WebSocket> = new Map();
+  private activeExecutors: Map<string, { cancel?: () => void; cancelExecution?: (id: string) => void }> = new Map();
   private connectionCounter = 0;
 
   constructor() {
-    this.apsf = new APSFBridgeService();
     this.modeRouter = new ExecutionModeRouter(
       (process.env.EXECUTION_MODE as ExecutionMode) || 'cli-full'
     );
@@ -78,17 +75,14 @@ export class ExecutionHandler {
         })
       );
 
-      if (request.mode) {
-        // 🔹 Execution Mode Router 経由（CLI-FULL / CLI-LITE / API）
-        const executor = this.modeRouter.getExecutor(request);
-        executor.on('event', (event: StreamEvent) => {
-          executionEvents.emit('event', event);
-        });
-        await executor.execute(request);
-      } else {
-        // レガシー経路: APSF python framework
-        await this.apsf.execute(request);
-      }
+      // Execution Mode Router 経由（mode 未指定はデフォルトモード）
+      const executor = this.modeRouter.getExecutor(request);
+      this.activeExecutors.set(request.runId, executor as any);
+      executor.on('event', (event: StreamEvent) => {
+        executionEvents.emit('event', event);
+      });
+      await executor.execute(request);
+      this.activeExecutors.delete(request.runId);
 
       // イベントはリスナーから自動配信
 
@@ -107,15 +101,16 @@ export class ExecutionHandler {
    * キャンセルリクエストを処理
    */
   private handleCancel(runId: string): void {
-    this.apsf.cancelExecution(runId);
+    const executor = this.activeExecutors.get(runId);
+    executor?.cancelExecution?.(runId);
+    (executor as any)?.cancel?.();
+    this.activeExecutors.delete(runId);
   }
 
   /**
-   * APSF イベントをすべてのクライアントに配信
+   * 実行イベントをすべてのクライアントに配信
    */
   private setupEventListeners(): void {
-    // Bridge（レガシー経路）のイベント
-    this.apsf.on('event', (event: StreamEvent) => this.broadcast(event));
     // Executor / REST 経由のイベント（共有バス）
     executionEvents.on('event', (event: StreamEvent) => this.broadcast(event));
   }

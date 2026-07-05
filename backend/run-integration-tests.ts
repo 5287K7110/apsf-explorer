@@ -6,8 +6,8 @@
  * ExecutionHandler / APSFBridgeService / routes / auth middleware を
  * 実装コード経由で検証する。
  *
- * APSF CLI は __tests__/fixtures/apsf の実 python モジュールを実行する
- * （実プロセス spawn・実 stdout/stderr ストリーム・実 exit code）。
+ * AI CLI は __tests__/fixtures/fake_cli.py（実 python プロセス）に差し替えて
+ * 本物の実行経路（実 spawn・実 stdout/stderr ストリーム・実 exit code）を通す。
  */
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { resolve, dirname } from 'path';
@@ -67,11 +67,6 @@ function startBackend(): Promise<void> {
         ...process.env,
         PORT: String(PORT),
         JWT_SECRET,
-        ANTHROPIC_API_KEY: 'test-key-anthropic',
-        OPENAI_API_KEY: '',
-        // 実 python + 実フィクスチャモジュールで本物の実行経路を通す
-        APSF_PYTHON_PATH: 'python',
-        APSF_CLI_PATH: FIXTURE_DIR,
         // Executor (CLI-FULL/LITE) 用の実プロセス CLI フィクスチャ
         APSF_CLI_OVERRIDE: `python "${resolve(FIXTURE_DIR, 'fake_cli.py')}"`,
         RUNS_DIR: resolve(__dirname, 'runs'),
@@ -191,12 +186,12 @@ async function main(): Promise<void> {
     assert(r.status === 403, `expected 403, got ${r.status}`);
   });
 
-  await test('GET /api/runs/providers returns configured providers', async () => {
+  await test('GET /api/runs/providers detects real CLIs on PATH', async () => {
     const r = await fetch(`${BASE}/api/runs/providers`, { headers: authHeader() });
     const body = await r.json();
     assert(r.status === 200, `expected 200, got ${r.status}`);
-    assert(Array.isArray(body.providers) && body.providers.includes('anthropic'),
-      `providers missing anthropic: ${JSON.stringify(body)}`);
+    assert(Array.isArray(body.providers), 'providers missing');
+    assert(typeof body.count === 'number' && body.count === body.providers.length, 'count mismatch');
   });
 
   await test('GET /api/runs/execution-modes lists real CLI availability', async () => {
@@ -268,16 +263,17 @@ async function main(): Promise<void> {
     assert(r.ok, 'backend crashed after api-mode execution');
   });
 
-  await test('POST execute rejects unavailable provider (400)', async () => {
-    const r = await fetch(`${BASE}/api/runs/rest-bad-1/execute`, {
+  await test('POST execute without mode defaults to cli-full', async () => {
+    const r = await fetch(`${BASE}/api/runs/rest-default-1/execute`, {
       method: 'POST',
       headers: authHeader(),
-      body: JSON.stringify({ command: 'goal', provider: 'openai' }),
+      body: JSON.stringify({ command: 'plan', provider: 'claude' }),
     });
-    assert(r.status === 400, `expected 400, got ${r.status}`);
+    const body = await r.json();
+    assert(r.status === 200 && body.mode === 'cli-full', `unexpected: ${JSON.stringify(body)}`);
   });
 
-  // ---- WebSocket (ExecutionHandler + APSFBridgeService 実装経由) ----
+  // ---- WebSocket (ExecutionHandler + Executor 実装経由) ----
 
   await test('WebSocket: connection to real server', async () => {
     await new Promise<void>((res, reject) => {
@@ -290,45 +286,36 @@ async function main(): Promise<void> {
 
   await test('WebSocket: execute → execution-start event', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'ws-run-1', provider: 'anthropic', command: 'goal', roles: ['judge'] },
+      { runId: 'ws-run-1', provider: 'claude', command: 'plan', roles: ['judge'] },
       (m) => m.type === 'execution-start' && m.runId === 'ws-run-1'
     );
-    assert(msg.provider === 'anthropic', 'provider mismatch');
+    assert(msg.provider === 'claude', 'provider mismatch');
   });
 
-  await test('WebSocket: real python process → progress event', async () => {
+  await test('WebSocket: real python process → progress event (default mode)', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'ws-run-2', provider: 'anthropic', command: 'goal', roles: ['judge'] },
+      { runId: 'ws-run-2', provider: 'claude', command: 'plan', roles: ['judge'] },
       (m) => m.type === 'progress' && m.runId === 'ws-run-2'
     );
-    assert(msg.data && msg.data.provider === 'anthropic', 'progress data missing provider');
+    assert(msg.data && msg.data.mode === 'cli-full', `progress data.mode: ${msg.data?.mode}`);
   });
 
   await test('WebSocket: real python exit 0 → complete event', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'ws-run-3', provider: 'anthropic', command: 'goal', roles: ['judge'] },
+      { runId: 'ws-run-3', provider: 'claude', command: 'plan', roles: ['judge'] },
       (m) => m.type === 'complete' && m.runId === 'ws-run-3'
     );
     assert(msg.data.exitCode === 0, `exitCode: ${msg.data.exitCode}`);
   });
 
-  await test('WebSocket: real python exit 1 → error event', async () => {
+  await test('WebSocket: real python exit 1 → error event (no crash)', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'ws-run-4', provider: 'anthropic', command: 'fail', roles: ['judge'] },
+      { runId: 'ws-run-4', provider: 'claude', command: 'plan', roles: ['judge'], goal: 'fail' },
       (m) => m.type === 'error' && m.runId === 'ws-run-4'
     );
     assert(msg.data.error, 'error payload missing');
-  });
-
-  await test('WebSocket: missing API key provider → error event (no crash)', async () => {
-    // OPENAI_API_KEY 未設定なので validateProvider が失敗する経路
-    await executeAndWaitFor(
-      { runId: 'ws-run-5', provider: 'openai', command: 'goal', roles: [] },
-      (m) => m.type === 'error' && m.runId === 'ws-run-5'
-    );
-    // クラッシュしていないこと（health が生きている）
     const r = await fetch(`${BASE}/health`);
-    assert(r.ok, 'backend crashed after missing-key execution');
+    assert(r.ok, 'backend crashed after failing execution');
   });
 
   await test('WebSocket: invalid JSON message → error response', async () => {
@@ -347,11 +334,11 @@ async function main(): Promise<void> {
   await test('WebSocket: concurrent executions both complete', async () => {
     const [a, b] = await Promise.all([
       executeAndWaitFor(
-        { runId: 'conc-1', provider: 'anthropic', command: 'goal', roles: [] },
+        { runId: 'conc-1', provider: 'claude', command: 'plan', roles: [] },
         (m) => m.type === 'complete' && m.runId === 'conc-1'
       ),
       executeAndWaitFor(
-        { runId: 'conc-2', provider: 'anthropic', command: 'goal', roles: [] },
+        { runId: 'conc-2', provider: 'claude', command: 'plan', roles: [] },
         (m) => m.type === 'complete' && m.runId === 'conc-2'
       ),
     ]);

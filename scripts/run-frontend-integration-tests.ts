@@ -5,8 +5,8 @@
  * 実際の backend/src/index.ts を起動（既に localhost:3001 で稼働中なら再利用）し、
  * Frontend が使用する WebSocket プロトコルを実イベントで検証する。
  *
- * APSF CLI は backend/__tests__/fixtures/apsf の実 python モジュールを実行
- * （実プロセス・実ストリーム・実 exit code）。
+ * AI CLI は backend/__tests__/fixtures/fake_cli.py（実 python プロセス）に
+ * 差し替えて本物の実行経路（実 spawn・実ストリーム・実 exit code）を通す。
  */
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { resolve, dirname } from 'path';
@@ -64,9 +64,8 @@ async function ensureBackend(): Promise<void> {
     env: {
       ...process.env,
       PORT: String(PORT),
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'test-key-anthropic',
-      APSF_PYTHON_PATH: 'python',
-      APSF_CLI_PATH: FIXTURE_DIR,
+      APSF_CLI_OVERRIDE: `python "${resolve(FIXTURE_DIR, 'fake_cli.py')}"`,
+      RUNS_DIR: resolve(BACKEND_DIR, 'runs'),
     },
   });
   backend.stderr?.on('data', (d) => console.error(`[backend:err] ${d}`));
@@ -136,24 +135,25 @@ async function main(): Promise<void> {
 
   await test('Send & Receive: execute → execution-start', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'fe-run-1', provider: 'anthropic', command: 'goal', roles: ['critic'] },
+      { runId: 'fe-run-1', provider: 'claude', command: 'plan', roles: ['critic'] },
       (m) => m.type === 'execution-start' && m.runId === 'fe-run-1'
     );
-    assert(msg.provider === 'anthropic', 'provider mismatch');
+    assert(msg.provider === 'claude', 'provider mismatch');
   });
 
   await test('Progress Event: real process stdout → progress', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'fe-run-2', provider: 'anthropic', command: 'goal', roles: ['critic'] },
+      { runId: 'fe-run-2', provider: 'claude', command: 'plan', roles: ['critic'] },
       (m) => m.type === 'progress' && m.runId === 'fe-run-2'
     );
     assert(msg.timestamp && msg.data, 'progress payload incomplete');
-    assert(typeof msg.data.stage === 'string', 'progress data.stage missing');
+    assert(typeof msg.data.message === 'string' && msg.data.message.length > 0,
+      'progress data.message missing');
   });
 
   await test('Complete Event: real process exit 0 → complete', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'fe-run-3', provider: 'anthropic', command: 'goal', roles: ['critic'] },
+      { runId: 'fe-run-3', provider: 'claude', command: 'plan', roles: ['critic'] },
       (m) => m.type === 'complete' && m.runId === 'fe-run-3'
     );
     assert(msg.data.exitCode === 0, `exitCode: ${msg.data.exitCode}`);
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
 
   await test('Error Handling: real process exit 1 → error event', async () => {
     const msg = await executeAndWaitFor(
-      { runId: 'fe-run-4', provider: 'anthropic', command: 'fail', roles: [] },
+      { runId: 'fe-run-4', provider: 'claude', command: 'plan', roles: [], goal: 'fail' },
       (m) => m.type === 'error' && m.runId === 'fe-run-4'
     );
     assert(typeof msg.data.error === 'string' && msg.data.error.length > 0, 'error message missing');
