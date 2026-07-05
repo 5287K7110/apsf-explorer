@@ -9,11 +9,12 @@ import { DecisionFlow } from './DecisionFlow';
 import { ErrorDisplay } from './ErrorDisplay';
 import { LogViewer } from './LogViewer';
 import { Analytics } from './Analytics';
+import { APSFRunPanel } from './APSFRunPanel';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { BarChart3, Activity } from 'lucide-react';
+import { BarChart3, Activity, FolderGit2 } from 'lucide-react';
 
 export const Dashboard: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'run' | 'analytics'>('run');
+  const [activeTab, setActiveTab] = useState<'run' | 'analytics' | 'apsf'>('run');
   const {
     setSidebarOpen,
     sidebarOpen,
@@ -50,22 +51,6 @@ export const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [selectedRun?.id, selectedRun?.status]);
 
-  if (!selectedRun) {
-    return (
-      <div className="flex flex-col h-screen">
-        <Header className="flex-shrink-0" onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-            <div className="flex items-center justify-center h-96">
-              <p className="text-slate-500">Select a run to view details</p>
-            </div>
-          </main>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col h-screen">
       <Header className="flex-shrink-0" onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
@@ -97,12 +82,34 @@ export const Dashboard: React.FC = () => {
                 <BarChart3 size={18} />
                 Analytics
               </button>
+              <button
+                onClick={() => setActiveTab('apsf')}
+                data-testid="apsf-tab"
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                  activeTab === 'apsf'
+                    ? 'bg-primary-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <FolderGit2 size={18} />
+                APSF Runs
+              </button>
             </div>
           </div>
 
           {/* Tab content */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
-            {activeTab === 'run' ? (
+            {activeTab === 'apsf' ? (
+              // APSF Runs Tab（実 APSF Framework）
+              <div className="max-w-7xl">
+                <h1 className="text-3xl font-bold text-slate-100 mb-6">APSF Runs</h1>
+                <APSFRunPanel />
+              </div>
+            ) : activeTab === 'run' && !selectedRun ? (
+              <div className="flex items-center justify-center h-96">
+                <p className="text-slate-500">Select a run to view details</p>
+              </div>
+            ) : activeTab === 'run' && selectedRun ? (
               // Run Status Tab
               <div className="space-y-6 max-w-7xl">
                 {/* Run header */}

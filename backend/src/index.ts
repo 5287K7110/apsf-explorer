@@ -4,6 +4,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
 import runsRoute from './routes/runs.route.js';
+import authRoute from './routes/auth.route.js';
 import { ExecutionHandler } from './websocket/execution-handler.js';
 
 dotenv.config();
@@ -28,6 +29,7 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
+app.use('/api/auth', authRoute);
 app.use('/api/runs', runsRoute);
 
 // Health check

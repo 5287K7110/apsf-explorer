@@ -81,8 +81,9 @@ const getApiUrl = (): string => {
   } catch {
     // import.meta not available
   }
-  // Default
-  return 'http://localhost:3000/api';
+  // Default: 同一オリジンの /api（vite.config.ts の proxy が backend:3001 へ中継）
+  // NOTE: 旧デフォルト 'http://localhost:3000/api' はどこにも一致せず接続不能だった
+  return '/api';
 };
 
 export const apiClient = new APIClient(getApiUrl());

@@ -22,14 +22,17 @@ import { ExecuteRequest, StreamEvent } from '../types/index.js';
  * - APSF_BIN : apsf CLI コマンド名（デフォルト 'apsf'）
  */
 export class APSFRunBridge extends EventEmitter {
-  private apsfRoot: string;
-  private apsfBin: string;
   private activeProcesses: Map<string, ChildProcess> = new Map();
 
-  constructor() {
-    super();
-    this.apsfRoot = process.env.APSF_ROOT || '';
-    this.apsfBin = process.env.APSF_BIN || 'apsf';
+  // NOTE: コンストラクタでキャッシュしない。ESM の import ホイスティングにより
+  // モジュールレベルのインスタンス化が dotenv.config() より先に走るため、
+  // env はアクセス時に遅延評価する（統合テストと dev で挙動が割れたバグの修正）
+  private get apsfRoot(): string {
+    return process.env.APSF_ROOT || '';
+  }
+
+  private get apsfBin(): string {
+    return process.env.APSF_BIN || 'apsf';
   }
 
   /** 実 APSF が利用可能か（APSF_ROOT が実在し scripts/ を持つか） */
@@ -111,7 +114,16 @@ export class APSFRunBridge extends EventEmitter {
           ? { script: 'apsf-codex-build.ps1', extraArgs: [] }
           : { script: 'apsf-claude-build.ps1', extraArgs: [] };
       case 'full-cycle':
-        return { script: 'apsf-auto-loop.ps1', extraArgs: [] };
+        // auto-loop のデフォルトは codex plan/build。claude 指定時はラッパーを差し替える
+        return provider === 'claude'
+          ? {
+              script: 'apsf-auto-loop.ps1',
+              extraArgs: [
+                '-PlanScript', 'apsf-claude-act.ps1',
+                '-BuildScript', 'apsf-claude-build.ps1',
+              ],
+            }
+          : { script: 'apsf-auto-loop.ps1', extraArgs: [] };
       default:
         throw new Error(`Unknown command: ${request.command}`);
     }

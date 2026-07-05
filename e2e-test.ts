@@ -153,6 +153,44 @@ async function main(): Promise<void> {
     assert(await page.inputValue('input[type="email"]') === 'e2e@test.com', 'email value mismatch');
   });
 
+  // ---- ログイン以降（実 backend の /api/auth/login で本物の JWT を取得） ----
+  // backend(3001) が起動していない場合はスキップ
+  let backendUp = false;
+  try {
+    const r = await fetch('http://localhost:3001/health');
+    backendUp = r.ok;
+  } catch { /* backend not running */ }
+
+  if (backendUp) {
+    await test('Login with demo credentials → Dashboard renders', async () => {
+      await page.click('button[type="submit"]');
+      // LoginPage は成功時 window.location.href = '/' でリロードする
+      await page.waitForSelector('[data-testid="apsf-tab"]', { timeout: 15000 });
+    });
+
+    await test('APSF Runs tab → real framework run list renders', async () => {
+      await page.click('[data-testid="apsf-tab"]');
+      const panel = page.locator('[data-testid="apsf-panel"], [data-testid="apsf-unavailable"]');
+      await panel.first().waitFor({ state: 'visible', timeout: 10000 });
+      // APSF_ROOT 設定済み backend なら実 run 一覧が出る
+      const hasPanel = await page.locator('[data-testid="apsf-panel"]').count();
+      assert(hasPanel === 1, 'APSF panel unavailable — is APSF_ROOT set on the backend?');
+      const items = page.locator('[data-testid="apsf-run-list"] button');
+      assert(await items.count() > 0, 'run list is empty');
+    });
+
+    await test('Select run → real phase detection (`apsf next`) shows badge', async () => {
+      await page.locator('[data-testid="apsf-run-list"] button').first().click();
+      const badge = page.locator('[data-testid="apsf-phase"]');
+      await badge.waitFor({ state: 'visible', timeout: 30000 });
+      const text = (await badge.textContent())?.trim() || '';
+      // 実フェーズトークン（COMPLETE / PLAN_NEEDED 等）
+      assert(/[A-Z_]{4,}/.test(text), `unexpected phase badge: "${text}"`);
+    });
+  } else {
+    console.log('⏭️  SKIP  post-login E2E (backend not running on 3001)');
+  }
+
   await browser.close();
   stopVite();
 
