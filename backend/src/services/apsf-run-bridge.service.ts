@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
+import { PhaseDetector, resolveRunDir, PhaseInfo } from './apsf-native/phase-detector.js';
 
 /**
  * APSFRunBridge: 実 APSF Framework (ai-problem-solving-framework) との通信層
@@ -70,29 +71,29 @@ export class APSFRunBridge extends EventEmitter {
     return results.sort();
   }
 
-  /** `apsf next <run> --phase-only` で現在フェーズを取得（実 CLI 実行） */
-  getPhase(runName: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.apsfBin, ['next', runName, '--phase-only'], {
-        cwd: this.apsfRoot,
-        shell: true,
-        timeout: 30000,
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d) => (stdout += d.toString()));
-      child.stderr?.on('data', (d) => (stderr += d.toString()));
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0 && stdout.trim()) {
-          // 最終行がフェーズトークン（typer が警告等を先行出力する場合がある）
-          const lines = stdout.trim().split(/\r?\n/);
-          resolve(lines[lines.length - 1].trim());
-        } else {
-          reject(new Error(`apsf next failed (exit=${code}): ${stderr.slice(0, 200)}`));
-        }
-      });
-    });
+  /**
+   * 現在フェーズを取得（TS ネイティブ検出）
+   *
+   * 旧実装は `apsf next --phase-only` を spawn していた（python 起動 ~500ms/回）。
+   * apsf-native/phase-detector.ts が同一規則を実装しており、全 29 run で
+   * parity 検証済み（run-apsf-parity-test.ts: 29 match, 0 mismatch）。
+   */
+  async getPhase(runName: string): Promise<string> {
+    return this.getPhaseInfo(runName).phase;
+  }
+
+  /** フェーズ + メタ情報（next role / 読み書きファイル / human 判定） */
+  getPhaseInfo(runName: string): PhaseInfo {
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) {
+      throw new Error(`Run not found: ${runName}`);
+    }
+    return new PhaseDetector(runDir).detect();
+  }
+
+  /** run ディレクトリの絶対パス */
+  getRunDir(runName: string): string | null {
+    return resolveRunDir(this.apsfRoot, runName);
   }
 
   /**
