@@ -15,6 +15,8 @@ enforced** — the auto-loop always stops at judgment points (`IMPROVE_NEEDED`,
 `RESULT_NEEDED`, ...) and hands control back to you. Every phase produces an
 auditable Markdown artifact with guarded state transitions.
 
+![APSF Explorer — run list, live phase detection, and Judge advisory](docs/images/apsf-runs-panel.png)
+
 ## Why
 
 Most AI agent tools optimize for full autonomy. APSF Explorer optimizes for
@@ -68,9 +70,16 @@ cd backend && npm run dev               # backend :3001
 npm run dev                             # frontend :5173
 ```
 
-Open http://localhost:5173 — sign in with any email/password (demo auth),
-then use the **APSF Runs** tab to browse runs, check phases, and execute.
-Keep **DryRun** checked to preview prompts without spending tokens.
+Open http://localhost:5173 — sign in with any email/password (demo auth).
+From the **APSF Runs** tab you can:
+
+- **Create a run** (`+` button) — light runs start at `TASK_NEEDED`
+- **Write human phases in the browser** — task.md / improve.md / result.md are
+  saved through `apsf write-phase` (overwrite protection + state transitions)
+- **Execute AI phases** — plan / build / review / full-cycle, with a
+  **DryRun** toggle to preview the assembled prompt without spending tokens
+- **See the Judge advisory** — `judge_advisory.json` is surfaced when the loop
+  stops at `IMPROVE_NEEDED`
 
 ## Testing
 
@@ -102,8 +111,8 @@ RUN_REAL_CLI=1 npx tsx backend/run-cli-integration-tests.ts
 ## Status
 
 Working alpha. The full loop (real AI executing BUILD → REVIEW, stopping at
-the human judgment gate) is verified end-to-end. See open items in
-[BACKLOG.md](BACKLOG.md).
+the human judgment gate) is verified end-to-end, and the human side of the
+loop (run creation, phase writing) works from the browser.
 
 ## License
 

@@ -104,8 +104,100 @@ router.get('/apsf', (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/runs/apsf
+ * 新しい run を作成（apsf start-run 経由）
+ */
+router.post('/apsf', async (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const { runName, light, taxonomy } = req.body || {};
+    if (!runName) {
+      res.status(400).json({ error: 'runName is required' });
+      return;
+    }
+    await apsfRun.createRun(runName, { light: Boolean(light), taxonomy });
+    const info = apsfRun.getPhaseInfo(runName);
+    res.json({ runName, phase: info.phase, fileToWrite: info.fileToWrite });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/runs/apsf/:id/files/:filename
+ * phase ファイルの内容を取得
+ */
+router.get('/apsf/:id/files/:filename', (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const content = apsfRun.readPhaseFile(req.params.id, req.params.filename);
+    if (content === null) {
+      res.status(404).json({ error: `File not found: ${req.params.filename}` });
+      return;
+    }
+    res.json({ runId: req.params.id, filename: req.params.filename, content });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/runs/apsf/:id/write-phase
+ * 現在フェーズの対象ファイルに内容を保存（human フェーズの記入用）
+ * apsf write-phase --stdin 経由（上書き保護・run_state 遷移付き）
+ */
+router.post('/apsf/:id/write-phase', async (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const { content } = req.body || {};
+    if (!content || typeof content !== 'string') {
+      res.status(400).json({ error: 'content (string) is required' });
+      return;
+    }
+    const result = await apsfRun.writePhase(req.params.id, content);
+    res.json({ runId: req.params.id, ...result });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/runs/apsf/:id/advisory
+ * judge_advisory.json（IMPROVE_NEEDED での Judge 推奨）を取得
+ */
+router.get('/apsf/:id/advisory', (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const advisory = apsfRun.getAdvisory(req.params.id);
+    res.json({ runId: req.params.id, advisory });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * GET /api/runs/apsf/:id/phase
- * 実 APSF のフェーズ検出（apsf next <run> --phase-only を実行）
+ * 実 APSF のフェーズ検出（TS ネイティブ、`apsf next` と parity 検証済み）
  */
 router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
   try {
@@ -113,8 +205,15 @@ router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
       res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
       return;
     }
-    const phase = await apsfRun.getPhase(req.params.id);
-    res.json({ runId: req.params.id, phase });
+    const info = apsfRun.getPhaseInfo(req.params.id);
+    res.json({
+      runId: req.params.id,
+      phase: info.phase,
+      fileToWrite: info.fileToWrite,
+      nextRole: info.nextRole,
+      humanOwned: info.humanOwned,
+      executing: apsfRun.listExecuting().includes(req.params.id),
+    });
   } catch (error) {
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Unknown error',

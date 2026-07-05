@@ -26,6 +26,23 @@ export interface ApsfExecuteResponse {
 
 export type ApsfCommand = 'plan' | 'build' | 'review' | 'full-cycle';
 
+export interface ApsfPhaseInfo {
+  runId: string;
+  phase: string;
+  fileToWrite?: string;
+  nextRole?: string;
+  humanOwned?: boolean;
+}
+
+export interface ApsfAdvisory {
+  recommendation?: string;
+  human_owned_blocker?: boolean;
+  advisory_source?: string;
+  phase?: string;
+  ownership_status?: string;
+  [key: string]: unknown;
+}
+
 export const apsfAPI = {
   /** 実 APSF の run 一覧 */
   getRuns(): Promise<ApsfRunsResponse> {
@@ -39,7 +56,37 @@ export const apsfAPI = {
     );
   },
 
-  /** 実 APSF ラッパー実行（mode: apsf-run） */
+  /** 新しい run を作成（apsf start-run 経由） */
+  createRun(runName: string, options: { light?: boolean; taxonomy?: string } = {}) {
+    return apiClient.post<{ runName: string; phase: string; fileToWrite: string }>(
+      '/runs/apsf',
+      { runName, ...options }
+    );
+  },
+
+  /** phase ファイルの内容を取得 */
+  getFile(runId: string, filename: string) {
+    return apiClient.get<{ runId: string; filename: string; content: string }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/files/${encodeURIComponent(filename)}`
+    );
+  },
+
+  /** 現在フェーズの対象ファイルに保存（human フェーズの記入） */
+  writePhase(runId: string, content: string) {
+    return apiClient.post<{ runId: string; fileWritten: string; phase: string }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/write-phase`,
+      { content }
+    );
+  },
+
+  /** judge_advisory.json の取得 */
+  getAdvisory(runId: string) {
+    return apiClient.get<{ runId: string; advisory: ApsfAdvisory | null }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/advisory`
+    );
+  },
+
+  /** 実 APSF 実行（mode: apsf-run） */
   execute(
     runId: string,
     command: ApsfCommand,

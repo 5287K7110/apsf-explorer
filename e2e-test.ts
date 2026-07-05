@@ -187,6 +187,48 @@ async function main(): Promise<void> {
       // 実フェーズトークン（COMPLETE / PLAN_NEEDED 等）
       assert(/[A-Z_]{4,}/.test(text), `unexpected phase badge: "${text}"`);
     });
+
+    // ---- run 作成 → human フェーズ記入の一気通貫（実 apsf start-run / write-phase） ----
+    const E2E_RUN = 'work_explorer-e2e-ui-test';
+    const today = new Date().toISOString().slice(0, 10);
+    const E2E_RUN_FULL = `${today}_${E2E_RUN}`;
+
+    await test('Create run from UI → TASK_NEEDED badge', async () => {
+      await page.click('[data-testid="apsf-new-run"]');
+      await page.fill('[data-testid="apsf-new-run-name"]', E2E_RUN);
+      await page.click('[data-testid="apsf-create-run"]');
+      // 作成後は新 run が自動選択され TASK_NEEDED になる
+      const badge = page.locator('[data-testid="apsf-phase"]');
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="apsf-phase"]')?.textContent?.includes('TASK_NEEDED'),
+        undefined,
+        { timeout: 30000 }
+      );
+      assert((await badge.textContent())?.includes('TASK_NEEDED'), 'phase is not TASK_NEEDED');
+    });
+
+    await test('Human phase editor: write task.md from UI → BUILD_NEEDED', async () => {
+      await page.click('[data-testid="apsf-edit-phase"]');
+      const textarea = page.locator('[data-testid="apsf-editor-textarea"]');
+      await textarea.waitFor({ state: 'visible', timeout: 10000 });
+      await textarea.fill(
+        '# Task\n\n## What\n\nE2E UI からの human フェーズ記入テスト。\n\n' +
+        '## Context\n\n- Playwright による実ブラウザ操作\n- 保存は apsf write-phase 経由\n\n' +
+        '## Done Criteria\n\n- [x] UI から task.md が保存できる\n'
+      );
+      await page.click('[data-testid="apsf-save-phase"]');
+      // write-phase により実フェーズが BUILD_NEEDED へ遷移する
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="apsf-phase"]')?.textContent?.includes('BUILD_NEEDED'),
+        undefined,
+        { timeout: 30000 }
+      );
+    });
+
+    // E2E で作成した一時 run を削除
+    const { rmSync } = await import('fs');
+    const apsfRoot = process.env.APSF_ROOT || 'C:/Users/PC_User/PRJ/ai-problem-solving-framework';
+    rmSync(`${apsfRoot}/runs/work/${E2E_RUN_FULL}`, { recursive: true, force: true });
   } else {
     console.log('⏭️  SKIP  post-login E2E (backend not running on 3001)');
   }

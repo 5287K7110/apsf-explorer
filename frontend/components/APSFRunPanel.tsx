@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, Play, FolderGit2, CircleDot, Loader2 } from 'lucide-react';
-import { apsfAPI, ApsfCommand } from '../services/apsfAPI';
+import {
+  RefreshCw, Play, FolderGit2, CircleDot, Loader2, Plus, Save,
+  PenLine, Scale, X,
+} from 'lucide-react';
+import { apsfAPI, ApsfCommand, ApsfAdvisory } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
 // フェーズ定義は backend と共有（apsf-native/phases.ts が単一の正）
 import { isHumanPhase } from '../../backend/src/services/apsf-native/phases';
@@ -8,9 +11,11 @@ import { isHumanPhase } from '../../backend/src/services/apsf-native/phases';
 /**
  * APSF Run Panel — 実 APSF Framework の run を操作する
  *
- * - GET /api/runs/apsf          : 実 run 一覧
- * - GET /api/runs/apsf/:id/phase: 実 `apsf next --phase-only`
- * - POST /api/runs/:id/execute  : mode 'apsf-run' で実ラッパー実行
+ * - run 一覧 / 作成（apsf start-run 経由）
+ * - フェーズ検出（TS ネイティブ、parity 検証済み）
+ * - AI フェーズ実行（plan/build/review/full-cycle、DryRun 対応）
+ * - human フェーズの記入（apsf write-phase 経由 — 上書き保護・遷移付き）
+ * - Judge advisory（judge_advisory.json）の表示
  * - WebSocket progress/complete/error をライブログ表示
  */
 
@@ -32,6 +37,8 @@ export const APSFRunPanel: React.FC = () => {
   const [runs, setRuns] = useState<string[]>([]);
   const [selected, setSelected] = useState<string>('');
   const [phase, setPhase] = useState<string>('');
+  const [fileToWrite, setFileToWrite] = useState<string>('');
+  const [nextRole, setNextRole] = useState<string>('');
   const [phaseLoading, setPhaseLoading] = useState(false);
   const [command, setCommand] = useState<ApsfCommand>('plan');
   const [provider, setProvider] = useState<'claude' | 'codex'>('claude');
@@ -39,6 +46,19 @@ export const APSFRunPanel: React.FC = () => {
   const [executing, setExecuting] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // run 作成フォーム
+  const [showCreate, setShowCreate] = useState(false);
+  const [newRunName, setNewRunName] = useState('');
+  const [newRunLight, setNewRunLight] = useState(true);
+  const [creating, setCreating] = useState(false);
+  // human フェーズエディタ
+  const [showEditor, setShowEditor] = useState(false);
+  const [editorContent, setEditorContent] = useState('');
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Judge advisory
+  const [advisory, setAdvisory] = useState<ApsfAdvisory | null>(null);
+
   const logEndRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -65,14 +85,24 @@ export const APSFRunPanel: React.FC = () => {
     loadRuns();
   }, [loadRuns]);
 
-  // 実フェーズ検出
+  // 実フェーズ検出（+ advisory）
   const detectPhase = useCallback(async (runId: string) => {
     if (!runId) return;
     setPhaseLoading(true);
     setPhase('');
+    setAdvisory(null);
     try {
       const res = await apsfAPI.getPhase(runId);
       setPhase(res.phase);
+      setFileToWrite(res.fileToWrite || '');
+      setNextRole(res.nextRole || '');
+      // IMPROVE 系フェーズでは Judge advisory を取得
+      if (res.phase.startsWith('IMPROVE')) {
+        try {
+          const adv = await apsfAPI.getAdvisory(runId);
+          setAdvisory(adv.advisory);
+        } catch { /* advisory は任意 */ }
+      }
     } catch (e) {
       setPhase('ERROR');
       appendLog('error', e instanceof Error ? e.message : 'phase detection failed');
@@ -84,6 +114,7 @@ export const APSFRunPanel: React.FC = () => {
   useEffect(() => {
     if (selected) {
       setLogs([]);
+      setShowEditor(false);
       detectPhase(selected);
     }
   }, [selected, detectPhase]);
@@ -94,7 +125,7 @@ export const APSFRunPanel: React.FC = () => {
       if (data.runId !== selectedRef.current) return;
       const text =
         kind === 'complete'
-          ? `完了 (exit=${data.data?.exitCode ?? '?'}, phase=${data.data?.phase ?? '?'})`
+          ? `完了 (phase=${data.data?.phase ?? '?'}${data.data?.stopReason ? `, stop=${data.data.stopReason}` : ''})`
           : kind === 'error'
             ? String(data.data?.error ?? 'unknown error')
             : String(data.data?.message ?? '').trimEnd();
@@ -138,6 +169,56 @@ export const APSFRunPanel: React.FC = () => {
     }
   };
 
+  const handleCreateRun = async () => {
+    const name = newRunName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    try {
+      // 日付プレフィックスがなければ今日の日付を付与（apsf start-run と同じ流儀）
+      const today = new Date().toISOString().slice(0, 10);
+      const fullName = /^\d{4}-\d{2}-\d{2}/.test(name) ? name : `${today}_${name}`;
+      const res = await apsfAPI.createRun(fullName, { light: newRunLight, taxonomy: 'work' });
+      setShowCreate(false);
+      setNewRunName('');
+      await loadRuns();
+      setSelected(res.runName);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'run creation failed');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const openEditor = async () => {
+    if (!selected || !fileToWrite || fileToWrite === '(none)') return;
+    setEditorLoading(true);
+    setShowEditor(true);
+    try {
+      const res = await apsfAPI.getFile(selected, fileToWrite);
+      setEditorContent(res.content);
+    } catch {
+      // ファイル未作成 → 空から開始
+      setEditorContent('');
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const handleSavePhase = async () => {
+    if (!selected || saving || !editorContent.trim()) return;
+    setSaving(true);
+    try {
+      const res = await apsfAPI.writePhase(selected, editorContent);
+      appendLog('info', `保存: ${res.fileWritten} → phase=${res.phase}`);
+      setShowEditor(false);
+      detectPhase(selected);
+    } catch (e) {
+      appendLog('error', e instanceof Error ? e.message : 'save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (available === null) {
     return (
       <div className="flex items-center gap-2 text-slate-400 p-8">
@@ -162,19 +243,60 @@ export const APSFRunPanel: React.FC = () => {
   return (
     <div className="grid gap-6 lg:grid-cols-3" data-testid="apsf-panel">
       {/* Run 一覧 */}
-      <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col max-h-[70vh]">
+      <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col max-h-[75vh]">
         <div className="flex items-center justify-between mb-3">
           <h2 className="flex items-center gap-2 font-semibold text-slate-200">
             <FolderGit2 size={16} /> APSF Runs ({runs.length})
           </h2>
-          <button
-            onClick={loadRuns}
-            className="p-1.5 rounded hover:bg-slate-800 text-slate-400"
-            title="Reload run list"
-          >
-            <RefreshCw size={14} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowCreate(!showCreate)}
+              data-testid="apsf-new-run"
+              className="p-1.5 rounded hover:bg-slate-800 text-slate-400"
+              title="New run"
+            >
+              <Plus size={14} />
+            </button>
+            <button
+              onClick={loadRuns}
+              className="p-1.5 rounded hover:bg-slate-800 text-slate-400"
+              title="Reload run list"
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
         </div>
+
+        {/* Run 作成フォーム */}
+        {showCreate && (
+          <div className="mb-3 p-3 bg-slate-800/60 border border-slate-700 rounded-lg space-y-2" data-testid="apsf-create-form">
+            <input
+              type="text"
+              value={newRunName}
+              onChange={(e) => setNewRunName(e.target.value)}
+              placeholder="case-key_topic（日付は自動付与）"
+              className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200 font-mono"
+              data-testid="apsf-new-run-name"
+            />
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={newRunLight}
+                onChange={(e) => setNewRunLight(e.target.checked)}
+              />
+              Light run（task.md から開始・最短フロー）
+            </label>
+            <button
+              onClick={handleCreateRun}
+              disabled={creating || !newRunName.trim()}
+              data-testid="apsf-create-run"
+              className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded transition"
+            >
+              {creating ? 'Creating...' : 'Create run'}
+            </button>
+          </div>
+        )}
+
         <p className="text-xs text-slate-500 mb-3 truncate" title={apsfRoot ?? ''}>
           {apsfRoot}
         </p>
@@ -219,15 +341,95 @@ export const APSFRunPanel: React.FC = () => {
                   onClick={() => detectPhase(selected)}
                   disabled={phaseLoading}
                   className="p-1.5 rounded hover:bg-slate-800 text-slate-400 disabled:opacity-50"
-                  title="Re-detect phase (runs `apsf next`)"
+                  title="Re-detect phase"
                 >
                   <RefreshCw size={14} />
                 </button>
-                {isHumanPhase(phase) && (
-                  <span className="text-xs text-amber-400">human-owned phase</span>
+                {nextRole && (
+                  <span className="text-xs text-slate-500">next: {nextRole}</span>
+                )}
+                {/* human フェーズは UI から直接記入できる */}
+                {isHumanPhase(phase) && fileToWrite && fileToWrite !== '(none)' && (
+                  <button
+                    onClick={openEditor}
+                    data-testid="apsf-edit-phase"
+                    className="flex items-center gap-1.5 px-3 py-1 bg-amber-700/60 hover:bg-amber-700 text-amber-100 text-xs font-semibold rounded-full transition"
+                  >
+                    <PenLine size={12} /> {fileToWrite} を記入
+                  </button>
                 )}
               </div>
+
+              {/* Judge advisory（IMPROVE 系フェーズ） */}
+              {advisory && (
+                <div className="mt-3 p-3 bg-slate-800/60 border border-slate-700 rounded-lg" data-testid="apsf-advisory">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-300 mb-1">
+                    <Scale size={12} /> Judge Advisory
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-xs ${
+                        advisory.recommendation === 'Accept'
+                          ? 'bg-green-900/50 text-green-300'
+                          : 'bg-amber-900/50 text-amber-300'
+                      }`}
+                    >
+                      {String(advisory.recommendation ?? 'unknown')}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-400 space-y-0.5">
+                    <p>source: {String(advisory.advisory_source ?? '—')}</p>
+                    {advisory.human_owned_blocker !== undefined && (
+                      <p>human blocker: {String(advisory.human_owned_blocker)}</p>
+                    )}
+                    {advisory.ownership_status !== undefined && (
+                      <p>ownership: {String(advisory.ownership_status)}</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* human フェーズエディタ */}
+            {showEditor && (
+              <div className="bg-slate-900 border border-amber-800/60 rounded-xl p-4 space-y-3" data-testid="apsf-editor">
+                <div className="flex items-center justify-between">
+                  <h4 className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+                    <PenLine size={14} /> {fileToWrite}
+                    <span className="text-xs text-slate-500 font-normal">
+                      保存は apsf write-phase 経由（上書き保護・フェーズ遷移付き）
+                    </span>
+                  </h4>
+                  <button
+                    onClick={() => setShowEditor(false)}
+                    className="p-1 rounded hover:bg-slate-800 text-slate-400"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                {editorLoading ? (
+                  <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
+                    <Loader2 className="animate-spin" size={16} /> loading...
+                  </div>
+                ) : (
+                  <textarea
+                    value={editorContent}
+                    onChange={(e) => setEditorContent(e.target.value)}
+                    rows={14}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-200 font-mono resize-y focus:border-amber-600 focus:outline-none"
+                    data-testid="apsf-editor-textarea"
+                    placeholder="Markdown で記入..."
+                  />
+                )}
+                <button
+                  onClick={handleSavePhase}
+                  disabled={saving || !editorContent.trim()}
+                  data-testid="apsf-save-phase"
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition"
+                >
+                  {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
+                  {saving ? 'Saving...' : `Save ${fileToWrite}`}
+                </button>
+              </div>
+            )}
 
             {/* 実行コントロール */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">

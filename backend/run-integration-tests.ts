@@ -404,6 +404,134 @@ async function main(): Promise<void> {
       const body = await r.json();
       assert(body.available.includes('apsf-run'), `available: ${JSON.stringify(body.available)}`);
     });
+
+    await test('APSF: GET files/:filename reads real phase file', async () => {
+      assert(knownRun, 'no known run');
+      const r = await fetch(
+        `${BASE}/api/runs/apsf/${encodeURIComponent(knownRun)}/files/task.md`,
+        { headers: authHeader() }
+      );
+      // task.md がある run（light）なら 200、なければ 404 — どちらも正常経路
+      assert(r.status === 200 || r.status === 404, `unexpected status ${r.status}`);
+      if (r.status === 200) {
+        const body = await r.json();
+        assert(typeof body.content === 'string' && body.content.length > 0, 'empty content');
+      }
+    });
+
+    await test('APSF: files endpoint rejects non-whitelisted filename (400)', async () => {
+      const r = await fetch(
+        `${BASE}/api/runs/apsf/${encodeURIComponent(knownRun)}/files/run_state.json`,
+        { headers: authHeader() }
+      );
+      assert(r.status === 400, `expected 400, got ${r.status}`);
+    });
+
+    await test('APSF: GET advisory returns judge_advisory.json when present', async () => {
+      // full-cycle 検証済み run は advisory を持つ
+      const r = await fetch(
+        `${BASE}/api/runs/apsf/2026-07-05-902_work_explorer-native-smoke/advisory`,
+        { headers: authHeader() }
+      );
+      if (r.status === 200) {
+        const body = await r.json();
+        assert(body.advisory === null || typeof body.advisory.recommendation === 'string',
+          `unexpected advisory: ${JSON.stringify(body).slice(0, 150)}`);
+      } else {
+        assert(r.status === 400, `unexpected status ${r.status}`); // run が無い環境
+      }
+    });
+
+    await test('APSF: POST create run → TASK_NEEDED → write-phase advances phase', async () => {
+      const tmpRun = '2026-07-05-999_work_explorer-api-test';
+      const { rmSync: rmRun, existsSync: runExists } = await import('fs');
+      const tmpDir = resolve(apsfRoot, 'runs/work', tmpRun);
+      // 前回の残骸を除去
+      rmRun(tmpDir, { recursive: true, force: true });
+
+      try {
+        // 1. 作成
+        const create = await fetch(`${BASE}/api/runs/apsf`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ runName: tmpRun, light: true, taxonomy: 'work' }),
+        });
+        const created = await create.json();
+        assert(create.status === 200, `create failed: ${JSON.stringify(created).slice(0, 200)}`);
+        assert(created.phase === 'TASK_NEEDED', `phase after create: ${created.phase}`);
+
+        // 2. human フェーズの記入（write-phase 経由）
+        const write = await fetch(`${BASE}/api/runs/apsf/${tmpRun}/write-phase`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({
+            content:
+              '# Task\n\n## What\n\nAPI 経由の write-phase 検証。ダミータスク。\n\n' +
+              '## Context\n\n- API テスト用の一時 run\n- 実行はしない\n\n' +
+              '## Done Criteria\n\n- [x] task.md が API 経由で保存される\n',
+          }),
+        });
+        const written = await write.json();
+        assert(write.status === 200, `write failed: ${JSON.stringify(written).slice(0, 200)}`);
+        assert(written.fileWritten === 'task.md', `fileWritten: ${written.fileWritten}`);
+        assert(written.phase === 'BUILD_NEEDED', `phase after write: ${written.phase}`);
+      } finally {
+        rmRun(tmpDir, { recursive: true, force: true });
+        assert(!runExists(tmpDir), 'cleanup failed');
+      }
+    });
+
+    await test('APSF: create run rejects invalid name (400)', async () => {
+      const r = await fetch(`${BASE}/api/runs/apsf`, {
+        method: 'POST',
+        headers: authHeader(),
+        body: JSON.stringify({ runName: '../evil', light: true }),
+      });
+      assert(r.status === 400, `expected 400, got ${r.status}`);
+    });
+
+    await test('APSF: double execution of same run is rejected', async () => {
+      const { APSFRunBridge } = await import('./src/services/apsf-run-bridge.service.js');
+      const { rmSync: rmRun } = await import('fs');
+      process.env.APSF_ROOT = apsfRoot;
+      const bridge = new APSFRunBridge();
+      const events: any[] = [];
+      bridge.on('event', (e: any) => events.push(e));
+
+      // BUILD_NEEDED の一時 run を用意（DryRun でも apsf act 実行に ~2s かかる）
+      const tmpRun = '2026-07-05-998_work_explorer-guard-test';
+      const tmpDir = resolve(apsfRoot, 'runs/work', tmpRun);
+      rmRun(tmpDir, { recursive: true, force: true });
+      await bridge.createRun(tmpRun, { light: true, taxonomy: 'work' });
+      await bridge.writePhase(tmpRun,
+        '# Task\n\n## What\n\n二重実行ガードの検証用ダミー。\n\n' +
+        '## Context\n\n- テスト用一時 run\n- AI 実行はしない（DryRun のみ）\n\n' +
+        '## Done Criteria\n\n- [x] ガードが機能する\n');
+
+      try {
+        // 1 回目（DryRun・await しない）→ 実行中に 2 回目 → 拒否されるはず
+        const first = bridge.execute({
+          runId: tmpRun, command: 'build', provider: 'claude', roles: [], mode: 'apsf-run',
+          context: { dryRun: true },
+        } as any);
+        await new Promise((r2) => setTimeout(r2, 150));
+        await bridge.execute({
+          runId: tmpRun, command: 'build', provider: 'claude', roles: [], mode: 'apsf-run',
+          context: { dryRun: true },
+        } as any);
+        await first;
+
+        const rejection = events.find(
+          (e) => e.type === 'error' && String(e.data?.error).includes('already executing')
+        );
+        assert(rejection, `no double-execution rejection. events: ${events.map((e) => e.type).join(',')}`);
+        // 1 回目は正常完了していること
+        const completed = events.find((e) => e.type === 'complete');
+        assert(completed, 'first execution did not complete');
+      } finally {
+        rmRun(tmpDir, { recursive: true, force: true });
+      }
+    });
   } else {
     console.log(`⏭️  SKIP  APSF framework tests (not found at ${apsfRoot})`);
   }

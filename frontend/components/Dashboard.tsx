@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useRunStore } from '../store/runStore';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -14,7 +14,8 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { BarChart3, Activity, FolderGit2 } from 'lucide-react';
 
 export const Dashboard: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'run' | 'analytics' | 'apsf'>('run');
+  // APSF Runs（実データ）がメインタブ。run/analytics はモックデータのデモ表示
+  const [activeTab, setActiveTab] = useState<'run' | 'analytics' | 'apsf'>('apsf');
   const {
     setSidebarOpen,
     sidebarOpen,
@@ -26,62 +27,15 @@ export const Dashboard: React.FC = () => {
 
   const selectedRun = getSelectedRun();
 
-  useEffect(() => {
-    // Simulate real-time updates
-    const interval = setInterval(() => {
-      if (selectedRun?.status === 'running') {
-        useRunStore.setState((state) => {
-          const updatedRuns = state.runs.map((r) => {
-            if (r.id === selectedRun.id && r.status === 'running') {
-              const newProgress = Math.min(r.progress + Math.random() * 10, 95);
-              const newAC = Math.min(r.acProgress + Math.random() * 5, 95);
-              return {
-                ...r,
-                progress: Math.round(newProgress),
-                acProgress: Math.round(newAC),
-              };
-            }
-            return r;
-          });
-          return { runs: updatedRuns };
-        });
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [selectedRun?.id, selectedRun?.status]);
-
   return (
     <div className="flex flex-col h-screen">
       <Header className="flex-shrink-0" onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
       <div className="flex flex-1 overflow-hidden sm:flex-row">
-        <Sidebar />
+        {activeTab !== 'apsf' && <Sidebar />}
         <main className="flex flex-col flex-1 overflow-hidden bg-slate-950">
           {/* Tab navigation */}
           <div className="sticky top-0 z-30 flex-shrink-0 border-b border-slate-700 bg-slate-900">
             <div className="flex items-center gap-4 px-4 sm:px-6 lg:px-8 py-4">
-              <button
-                onClick={() => setActiveTab('run')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'run'
-                    ? 'bg-primary-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Activity size={18} />
-                Run Status
-              </button>
-              <button
-                onClick={() => setActiveTab('analytics')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'analytics'
-                    ? 'bg-primary-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <BarChart3 size={18} />
-                Analytics
-              </button>
               <button
                 onClick={() => setActiveTab('apsf')}
                 data-testid="apsf-tab"
@@ -93,6 +47,30 @@ export const Dashboard: React.FC = () => {
               >
                 <FolderGit2 size={18} />
                 APSF Runs
+              </button>
+              <button
+                onClick={() => setActiveTab('run')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                  activeTab === 'run'
+                    ? 'bg-primary-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Activity size={18} />
+                Run Status
+                <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">Demo</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('analytics')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                  activeTab === 'analytics'
+                    ? 'bg-primary-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <BarChart3 size={18} />
+                Analytics
+                <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">Demo</span>
               </button>
             </div>
           </div>

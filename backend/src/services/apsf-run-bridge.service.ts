@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
@@ -20,8 +21,24 @@ import { NativeApsfExecutor } from './apsf-native/native-executor.js';
  * - APSF_ROOT: 実 APSF リポジトリのパス（未設定なら isAvailable() が false）
  * - APSF_BIN : apsf CLI コマンド名（デフォルト 'apsf'）
  */
+/** run 名の許容形式（YYYY-MM-DD(-NNN)_case_topic）— パス片として使うため厳格に検証 */
+export const RUN_NAME_RE = /^\d{4}-\d{2}-\d{2}(-\d{3})?_[A-Za-z0-9._-]+$/;
+
+/** phase として読み書きを許可するファイル名（ホワイトリスト） */
+export const PHASE_FILES = [
+  'task.md', 'goal.md', 'execution-assignment.md', 'plan.md', 'build.md',
+  'review.md', 'improve-plan.md', 'improve.md', 'verify.md', 'result.md',
+  'handoff.md', 'transcript.md',
+] as const;
+
+/**
+ * 実行中 executor のレジストリ。
+ * ExecutionModeRouter は getExecutor 毎に新しい APSFRunBridge を作るため、
+ * 二重実行ガード・キャンセルはインスタンスを跨いで共有する必要がある。
+ */
+const activeExecutors: Map<string, NativeApsfExecutor> = new Map();
+
 export class APSFRunBridge extends EventEmitter {
-  private activeExecutors: Map<string, NativeApsfExecutor> = new Map();
 
   // NOTE: コンストラクタでキャッシュしない。ESM の import ホイスティングにより
   // モジュールレベルのインスタンス化が dotenv.config() より先に走るため、
@@ -102,9 +119,17 @@ export class APSFRunBridge extends EventEmitter {
    * - request.context.dryRun = true でプロンプト組み立てのみ（AI 実行なし）
    */
   async execute(request: ExecuteRequest): Promise<void> {
+    let registered = false;
     try {
       if (!this.isAvailable()) {
         throw new Error('APSF framework not available. Set APSF_ROOT to the framework repository.');
+      }
+      if (!RUN_NAME_RE.test(request.runId)) {
+        throw new Error(`Invalid run name: ${request.runId}`);
+      }
+      // 同一 run への二重実行を防止
+      if (activeExecutors.has(request.runId)) {
+        throw new Error(`Run ${request.runId} is already executing. Cancel it first or wait for completion.`);
       }
 
       const provider = request.provider === 'codex' ? 'codex' : 'claude';
@@ -116,7 +141,8 @@ export class APSFRunBridge extends EventEmitter {
       );
 
       const executor = new NativeApsfExecutor(this.apsfRoot, this.apsfBin);
-      this.activeExecutors.set(request.runId, executor);
+      activeExecutors.set(request.runId, executor);
+      registered = true;
       executor.on('event', (event: StreamEvent) => this.emit('event', event));
 
       const opts = { runId: request.runId, provider, dryRun } as const;
@@ -131,7 +157,7 @@ export class APSFRunBridge extends EventEmitter {
         phase = await executor.executePhase(opts);
       }
 
-      this.activeExecutors.delete(request.runId);
+      activeExecutors.delete(request.runId);
       this.emit('event', {
         type: 'complete',
         runId: request.runId,
@@ -139,7 +165,8 @@ export class APSFRunBridge extends EventEmitter {
         data: { mode: 'apsf-run', engine: 'native', exitCode: 0, phase, ...detail },
       } as StreamEvent);
     } catch (error) {
-      this.activeExecutors.delete(request.runId);
+      // 二重実行拒否のエラーで先行実行のレジストリを消さないこと
+      if (registered) activeExecutors.delete(request.runId);
       this.emit('event', {
         type: 'error',
         runId: request.runId,
@@ -153,7 +180,118 @@ export class APSFRunBridge extends EventEmitter {
 
   /** 実行中の処理をキャンセル */
   cancelExecution(runId: string): void {
-    this.activeExecutors.get(runId)?.cancel();
-    this.activeExecutors.delete(runId);
+    activeExecutors.get(runId)?.cancel();
+    activeExecutors.delete(runId);
   }
+
+  /** 実行中の run 一覧 */
+  listExecuting(): string[] {
+    return [...activeExecutors.keys()];
+  }
+
+  // ── Run 作成・phase ファイル・advisory ─────────────────────────
+
+  /** phase ファイル名の検証（パストラバーサル防止のホワイトリスト） */
+  private assertPhaseFile(filename: string): void {
+    if (!(PHASE_FILES as readonly string[]).includes(filename)) {
+      throw new Error(`Not a phase file: ${filename}`);
+    }
+  }
+
+  private assertRunName(runName: string): void {
+    if (!RUN_NAME_RE.test(runName)) {
+      throw new Error(`Invalid run name: ${runName}`);
+    }
+  }
+
+  /**
+   * 新しい run を作成（`apsf start-run` 経由 — テンプレート複製・
+   * run_state 初期化は framework の正規経路に委ねる）
+   */
+  createRun(runName: string, options: { light?: boolean; taxonomy?: string } = {}): Promise<void> {
+    this.assertRunName(runName);
+    const args = ['start-run', runName];
+    if (options.light) args.push('--light');
+    if (options.taxonomy) {
+      if (!['fw-improvement', 'work'].includes(options.taxonomy)) {
+        throw new Error(`Invalid taxonomy: ${options.taxonomy}`);
+      }
+      args.push('--taxonomy', options.taxonomy);
+    }
+
+    return new Promise((resolve, reject) => {
+      const child = spawnApsf(this.apsfBin, args, this.apsfRoot);
+      let stderr = '';
+      let stdout = '';
+      child.stdout?.on('data', (d) => (stdout += d.toString()));
+      child.stderr?.on('data', (d) => (stderr += d.toString()));
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`apsf start-run failed (exit=${code}): ${(stderr || stdout).slice(0, 300)}`));
+      });
+    });
+  }
+
+  /** phase ファイルの内容を読む（存在しなければ null） */
+  readPhaseFile(runName: string, filename: string): string | null {
+    this.assertRunName(runName);
+    this.assertPhaseFile(filename);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    const p = path.join(runDir, filename);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : null;
+  }
+
+  /**
+   * 現在フェーズの対象ファイルに内容を保存
+   * （`apsf write-phase --stdin` 経由 — 上書き保護・run_state 遷移・
+   * イベントログは framework の正規経路に委ねる）
+   */
+  writePhase(runName: string, content: string): Promise<{ fileWritten: string; phase: string }> {
+    this.assertRunName(runName);
+    const target = this.getPhaseInfo(runName);
+
+    return new Promise((resolve, reject) => {
+      const child = spawnApsf(this.apsfBin, ['write-phase', runName, '--stdin'], this.apsfRoot);
+      let stderr = '';
+      let stdout = '';
+      child.stdout?.on('data', (d) => (stdout += d.toString()));
+      child.stderr?.on('data', (d) => (stderr += d.toString()));
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve({ fileWritten: target.fileToWrite, phase: this.getPhaseInfo(runName).phase });
+        } else {
+          reject(new Error(`apsf write-phase failed (exit=${code}): ${(stderr || stdout).slice(0, 300)}`));
+        }
+      });
+      child.stdin?.write(content);
+      child.stdin?.end();
+    });
+  }
+
+  /** judge_advisory.json を読む（存在しなければ null） */
+  getAdvisory(runName: string): Record<string, unknown> | null {
+    this.assertRunName(runName);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    const p = path.join(runDir, 'judge_advisory.json');
+    if (!fs.existsSync(p)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** apsf CLI を API キー env 除去 + UTF-8 で spawn する共通ヘルパー */
+function spawnApsf(bin: string, args: string[], cwd: string) {
+  const env = { ...process.env };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.OPENAI_API_KEY;
+  delete env.GEMINI_API_KEY;
+  env.PYTHONIOENCODING = 'utf-8';
+  return spawn(bin, args, { cwd, shell: true, env, timeout: 60000 });
 }
