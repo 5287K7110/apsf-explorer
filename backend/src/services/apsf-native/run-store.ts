@@ -88,10 +88,19 @@ function nextRunSeq(apsfRoot: string, dateStr: string): number {
   return maxSeq + 1;
 }
 
+/** ローカル日付を YYYY-MM-DD で返す（python の date.today() と同じ基準） */
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /** 日付プレフィックス補完（start_run_cmd: YYYY-MM-DD(-NNN)_ がなければ付与） */
 export function normalizeRunName(apsfRoot: string, rawName: string): string {
   if (/^\d{4}-\d{2}-\d{2}(?:-\d+)?_/.test(rawName)) return rawName;
-  const today = new Date().toISOString().slice(0, 10);
+  // NOTE: toISOString() は UTC 日付のため、UTC+9 等では深夜〜朝に前日となり
+  // python の date.today()（ローカル）と食い違う（実運用で発見した実バグ）
+  const today = localToday();
   const seq = nextRunSeq(apsfRoot, today);
   return `${today}-${String(seq).padStart(3, '0')}_${rawName}`;
 }

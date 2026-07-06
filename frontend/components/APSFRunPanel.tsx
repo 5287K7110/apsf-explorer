@@ -174,8 +174,11 @@ export const APSFRunPanel: React.FC = () => {
     if (!name || creating) return;
     setCreating(true);
     try {
-      // 日付プレフィックスがなければ今日の日付を付与（apsf start-run と同じ流儀）
-      const today = new Date().toISOString().slice(0, 10);
+      // 日付プレフィックスがなければローカル今日日付を付与（apsf start-run と同じ流儀。
+      // toISOString は UTC のため JST 深夜帯で前日になる — backend 側と同じ修正）
+      const d = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       const fullName = /^\d{4}-\d{2}-\d{2}/.test(name) ? name : `${today}_${name}`;
       const res = await apsfAPI.createRun(fullName, { light: newRunLight, taxonomy: 'work' });
       setShowCreate(false);
