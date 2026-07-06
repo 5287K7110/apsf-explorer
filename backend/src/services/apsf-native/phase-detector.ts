@@ -14,6 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ApsfPhase, PHASES, isValidTransition, isHumanPhase } from './phases.js';
+import { VENDORED_CONTENT_DIR } from './content-root.js';
 
 /** フェーズ検出で走査する既知ファイル（ワークフロー順） */
 const KNOWN_FILES = [
@@ -95,20 +96,27 @@ export class PhaseDetector {
     const runsRoot = this.findRunsRoot();
     if (!runsRoot) return false;
 
-    let templatePath = path.join(runsRoot, '_template', filename);
-    if (!fs.existsSync(templatePath)) {
-      const fwTemplate = path.join(path.dirname(runsRoot), 'framework', 'templates', filename);
-      if (fs.existsSync(fwTemplate)) {
-        templatePath = fwTemplate;
-      } else {
-        return false;
-      }
-    }
+    // python 版の探索順（workspace の _template → framework/templates）に加え、
+    // スタンドアロン運用（workspace に _template なし）向けに Explorer 同梱
+    // テンプレートへフォールバックする
+    const candidates = [
+      path.join(runsRoot, '_template', filename),
+      path.join(path.dirname(runsRoot), 'framework', 'templates', filename),
+      path.join(VENDORED_CONTENT_DIR, 'runs-template', filename),
+    ];
+    const templatePath = candidates.find((p) => fs.existsSync(p));
+    if (!templatePath) return false;
 
     try {
-      return (
-        fs.readFileSync(filePath, 'utf-8') === fs.readFileSync(templatePath, 'utf-8')
-      );
+      const fileContent = fs.readFileSync(filePath, 'utf-8');
+      const templateContent = fs.readFileSync(templatePath, 'utf-8');
+      if (fileContent === templateContent) return true;
+      // 同梱テンプレートとの比較は改行差（LF 同梱 vs CRLF 書き込み）を許容
+      if (templatePath.startsWith(VENDORED_CONTENT_DIR)) {
+        const norm = (s: string) => s.replace(/\r\n/g, '\n');
+        return norm(fileContent) === norm(templateContent);
+      }
+      return false;
     } catch {
       return false;
     }
@@ -202,6 +210,27 @@ export class PhaseDetector {
       return content.includes('Generated:');
     }
     return PhaseDetector.countMeaningfulLines(content) > 3;
+  }
+
+  /** isFilled の公開版（write-phase の次フェーズ決定木で使用） */
+  isFilledPublic(filename: string): boolean {
+    return this.isFilled(filename);
+  }
+
+  /**
+   * テンプレート骨格を超えるコンテンツが 1 行以上あるか
+   * （phase_detector.py _has_any_content — write-phase の上書き保護用。
+   * isFilled の 4 行閾値より低い閾値で部分的な記入も検出する）
+   */
+  hasAnyContent(filename: string): boolean {
+    if (!this.exists(filename)) return false;
+    if (this.matchesRunTemplate(filename)) return false;
+    return PhaseDetector.countMeaningfulLines(this.readText(filename)) > 0;
+  }
+
+  /** テキストに意味のある内容があるか（is_meaningful_text — 入力検証用） */
+  static isMeaningfulText(text: string): boolean {
+    return PhaseDetector.countMeaningfulLines(text) > 3;
   }
 
   // ── Advisory 検出（file heuristic） ──────────────────────────

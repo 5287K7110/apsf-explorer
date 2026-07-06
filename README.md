@@ -2,8 +2,9 @@
 
 **A phase-gated, human-in-the-loop GUI for AI problem-solving workflows.**
 
-APSF Explorer is the web frontend + orchestration backend for the
-[APSF (AI Problem Solving Framework)](https://github.com/) workflow:
+APSF Explorer implements the APSF (AI Problem Solving Framework) workflow —
+**fully self-contained** (Node.js only; no Python, no external framework
+install required):
 
 ```
 Goal → Plan → Build → Review → Improve → Result
@@ -38,24 +39,35 @@ React 18 + TS (Vite) ── /api, /ws ──► Node/Express + WebSocket
                               ExecutionModeRouter
                               ├─ cli-full   claude -p (tools on, artifacts saved)
                               ├─ cli-lite   claude -p (read-only tools, ephemeral)
-                              ├─ apsf-run   NativeApsfExecutor ──► APSF framework
+                              ├─ apsf-run   NativeApsfExecutor (all-TypeScript)
                               └─ api        (planned)                 │
                                                        runs/<name>/ *.md + run_state.json
 ```
 
-The `apsf-run` mode drives a real APSF framework checkout natively in
-TypeScript (no PowerShell): prompts are assembled by `apsf act --print-prompt`,
-executed by spawning the AI CLI directly, and persisted through
-`apsf write-phase --stdin` (canonical overwrite protection + state
-transitions). Phase detection is a native TS port verified for parity against
-the Python implementation across all real runs (30/30).
+The `apsf-run` mode is a **complete TypeScript implementation** of the APSF
+workflow engine (`backend/src/services/apsf-native/`): run creation from
+templates, file-heuristic + canonical phase detection, prompt assembly with
+keyword-scored specialist selection, guarded phase persistence (overwrite
+protection, validated state transitions, judge advisory extraction), and the
+human-gated auto-loop. Specialist definitions and run templates ship in
+`backend/content/`.
+
+It was ported from the original Python APSF framework and verified against it
+with a **51-point parity suite** — phase detection across every real run,
+byte-identical run scaffolding, identical prompts (up to 46 KB, specialist
+selection included), and matching state transitions / advisory records. If you
+have an existing APSF framework checkout, point `APSF_ROOT` at it and Explorer
+uses its runs/, templates, and specialists; otherwise any directory with an
+empty `runs/` folder works.
+
+> ⚠️ Writes to `runs/` should go through Explorer only. Mixing writes from the
+> Python `apsf` CLI and Explorer against the same workspace risks state drift.
 
 ## Getting started
 
 Prerequisites: Node 20+, and at least one AI CLI on PATH
-([Claude Code](https://claude.com/claude-code) and/or Codex CLI).
-For `apsf-run` mode: Python 3.11+ with the APSF framework installed
-(`pip install -e <framework>`).
+([Claude Code](https://claude.com/claude-code) and/or Codex CLI). That's all —
+no Python required.
 
 ```bash
 # 1. Install
@@ -63,7 +75,9 @@ npm install
 cd backend && npm install && cd ..
 
 # 2. Configure backend
-cp backend/.env.example backend/.env    # set APSF_ROOT for apsf-run mode
+cp backend/.env.example backend/.env
+mkdir -p ~/apsf-workspace/runs          # any directory with runs/ works
+# set APSF_ROOT=~/apsf-workspace in backend/.env
 
 # 3. Run (two terminals)
 cd backend && npm run dev               # backend :3001
@@ -75,7 +89,7 @@ From the **APSF Runs** tab you can:
 
 - **Create a run** (`+` button) — light runs start at `TASK_NEEDED`
 - **Write human phases in the browser** — task.md / improve.md / result.md are
-  saved through `apsf write-phase` (overwrite protection + state transitions)
+  saved with overwrite protection and validated state transitions
 - **Execute AI phases** — plan / build / review / full-cycle, with a
   **DryRun** toggle to preview the assembled prompt without spending tokens
 - **See the Judge advisory** — `judge_advisory.json` is surfaced when the loop
@@ -87,11 +101,12 @@ All test suites exercise real implementation code — real processes, real
 WebSocket events, real browser rendering. No mocks, no stubs.
 
 ```bash
-cd backend && npx tsx run-integration-tests.ts     # real backend, 26 tests
+cd backend && npx tsx run-integration-tests.ts     # real backend, 32 tests
 cd backend && npx tsx run-cli-integration-tests.ts # real CLI detection + invocation
-cd backend && npx tsx run-apsf-parity-test.ts      # TS vs Python phase parity
+cd backend && npx tsx run-apsf-standalone-test.ts  # empty workspace, no python on PATH
+cd backend && npx tsx run-apsf-parity-test.ts      # TS vs original Python (51 checks)
 npx tsx scripts/run-frontend-integration-tests.ts  # real WS protocol
-npm run test:e2e                                   # Playwright: login → phase badge
+npm run test:e2e                                   # Playwright: login → create → write
 
 # Opt-in (spends tokens): real AI end-to-end
 RUN_REAL_CLI=1 npx tsx backend/run-cli-integration-tests.ts

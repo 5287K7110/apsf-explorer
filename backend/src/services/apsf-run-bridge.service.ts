@@ -1,25 +1,33 @@
 import { EventEmitter } from 'events';
-import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
 import { PhaseDetector, resolveRunDir, PhaseInfo } from './apsf-native/phase-detector.js';
 import { NativeApsfExecutor } from './apsf-native/native-executor.js';
+import { startRun } from './apsf-native/run-store.js';
+import { writePhase as nativeWritePhase } from './apsf-native/write-phase.js';
 
 /**
- * APSFRunBridge: 実 APSF Framework (ai-problem-solving-framework) との通信層
+ * APSFRunBridge: APSF ワークフローのワークスペース操作層
  *
- * TS ネイティブ実装（ps1/PowerShell 依存なし・クロスプラットフォーム）:
- * - 状態       : <APSF_ROOT>/runs/<run-name>/ ディレクトリ（goal.md, plan.md, build.md...）
- * - フェーズ検出: apsf-native/phase-detector.ts（`apsf next` と parity 検証済み 29/29）
- * - 実行       : apsf-native/native-executor.ts
- *                （prompt = `apsf act --print-prompt` → claude/codex spawn →
- *                  保存 = `apsf write-phase --stdin`。ps1 ラッパーの置き換え）
- * - ループ      : NativeApsfExecutor.executeLoop（apsf-auto-loop.ps1 の置き換え）
+ * 完全 TypeScript ネイティブ（python / apsf CLI / PowerShell いずれも不要）:
+ * - 状態       : <APSF_ROOT>/runs/<run-name>/（goal.md, plan.md, run_state.json...）
+ * - フェーズ検出: phase-detector.ts（python `apsf next` と parity 30/30）
+ * - run 作成   : run-store.ts（python `apsf start-run` とバイト一致 parity）
+ * - phase 保存 : write-phase.ts（python `apsf write-phase` と parity 12/12 —
+ *                上書き保護・run_state 遷移・judge advisory 含む）
+ * - プロンプト  : prompt-builder.ts（python `apsf act --print-prompt` と
+ *                parity 6/6 バイト一致 — specialist 選択含む）
+ * - 実行/ループ : native-executor.ts（AI CLI 直接 spawn + human フェーズ停止）
  *
  * 設定:
- * - APSF_ROOT: 実 APSF リポジトリのパス（未設定なら isAvailable() が false）
- * - APSF_BIN : apsf CLI コマンド名（デフォルト 'apsf'）
+ * - APSF_ROOT: ワークスペースのパス（runs/ を含むディレクトリ。
+ *   既存の APSF framework checkout でも、runs/ だけの空ディレクトリでも良い。
+ *   specialist 定義・テンプレートは workspace に framework/ があればそれを、
+ *   なければ Explorer 同梱コンテンツ backend/content/ を使用）
+ *
+ * NOTE: runs/ への書き込みは Explorer に一本化する。python 版 apsf CLI との
+ * 並用は run 状態の drift を招くため非推奨。
  */
 /** run 名の許容形式（YYYY-MM-DD(-NNN)_case_topic）— パス片として使うため厳格に検証 */
 export const RUN_NAME_RE = /^\d{4}-\d{2}-\d{2}(-\d{3})?_[A-Za-z0-9._-]+$/;
@@ -45,10 +53,6 @@ export class APSFRunBridge extends EventEmitter {
   // env はアクセス時に遅延評価する（統合テストと dev で挙動が割れたバグの修正）
   private get apsfRoot(): string {
     return process.env.APSF_ROOT || '';
-  }
-
-  private get apsfBin(): string {
-    return process.env.APSF_BIN || 'apsf';
   }
 
   /** 実 APSF が利用可能か（APSF_ROOT の runs/ が実在するか） */
@@ -140,7 +144,7 @@ export class APSFRunBridge extends EventEmitter {
         `[APSF-RUN] native ${isLoop ? 'auto-loop' : 'single-phase'} ${request.runId}${dryRun ? ' (DryRun)' : ''}`
       );
 
-      const executor = new NativeApsfExecutor(this.apsfRoot, this.apsfBin);
+      const executor = new NativeApsfExecutor(this.apsfRoot);
       activeExecutors.set(request.runId, executor);
       registered = true;
       executor.on('event', (event: StreamEvent) => this.emit('event', event));
@@ -205,31 +209,20 @@ export class APSFRunBridge extends EventEmitter {
   }
 
   /**
-   * 新しい run を作成（`apsf start-run` 経由 — テンプレート複製・
-   * run_state 初期化は framework の正規経路に委ねる）
+   * 新しい run を作成（TS ネイティブ run-store — python start-run と
+   * バイト一致 parity 検証済み）
    */
-  createRun(runName: string, options: { light?: boolean; taxonomy?: string } = {}): Promise<void> {
+  async createRun(
+    runName: string,
+    options: { light?: boolean; taxonomy?: string } = {}
+  ): Promise<void> {
     this.assertRunName(runName);
-    const args = ['start-run', runName];
-    if (options.light) args.push('--light');
-    if (options.taxonomy) {
-      if (!['fw-improvement', 'work'].includes(options.taxonomy)) {
-        throw new Error(`Invalid taxonomy: ${options.taxonomy}`);
-      }
-      args.push('--taxonomy', options.taxonomy);
+    if (options.taxonomy && !['fw-improvement', 'work'].includes(options.taxonomy)) {
+      throw new Error(`Invalid taxonomy: ${options.taxonomy}`);
     }
-
-    return new Promise((resolve, reject) => {
-      const child = spawnApsf(this.apsfBin, args, this.apsfRoot);
-      let stderr = '';
-      let stdout = '';
-      child.stdout?.on('data', (d) => (stdout += d.toString()));
-      child.stderr?.on('data', (d) => (stderr += d.toString()));
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`apsf start-run failed (exit=${code}): ${(stderr || stdout).slice(0, 300)}`));
-      });
+    startRun(this.apsfRoot, runName, {
+      light: options.light,
+      taxonomy: options.taxonomy as 'fw-improvement' | 'work' | undefined,
     });
   }
 
@@ -245,30 +238,18 @@ export class APSFRunBridge extends EventEmitter {
 
   /**
    * 現在フェーズの対象ファイルに内容を保存
-   * （`apsf write-phase --stdin` 経由 — 上書き保護・run_state 遷移・
-   * イベントログは framework の正規経路に委ねる）
+   * （TS ネイティブ write-phase — 上書き保護・run_state 遷移・
+   * judge advisory。python 版と parity 検証済み）
    */
-  writePhase(runName: string, content: string): Promise<{ fileWritten: string; phase: string }> {
+  async writePhase(
+    runName: string,
+    content: string
+  ): Promise<{ fileWritten: string; phase: string }> {
     this.assertRunName(runName);
-    const target = this.getPhaseInfo(runName);
-
-    return new Promise((resolve, reject) => {
-      const child = spawnApsf(this.apsfBin, ['write-phase', runName, '--stdin'], this.apsfRoot);
-      let stderr = '';
-      let stdout = '';
-      child.stdout?.on('data', (d) => (stdout += d.toString()));
-      child.stderr?.on('data', (d) => (stderr += d.toString()));
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve({ fileWritten: target.fileToWrite, phase: this.getPhaseInfo(runName).phase });
-        } else {
-          reject(new Error(`apsf write-phase failed (exit=${code}): ${(stderr || stdout).slice(0, 300)}`));
-        }
-      });
-      child.stdin?.write(content);
-      child.stdin?.end();
-    });
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    const result = nativeWritePhase(runDir, content);
+    return { fileWritten: result.fileWritten, phase: result.phaseAfter };
   }
 
   /** judge_advisory.json を読む（存在しなければ null） */
@@ -284,14 +265,4 @@ export class APSFRunBridge extends EventEmitter {
       return null;
     }
   }
-}
-
-/** apsf CLI を API キー env 除去 + UTF-8 で spawn する共通ヘルパー */
-function spawnApsf(bin: string, args: string[], cwd: string) {
-  const env = { ...process.env };
-  delete env.ANTHROPIC_API_KEY;
-  delete env.OPENAI_API_KEY;
-  delete env.GEMINI_API_KEY;
-  env.PYTHONIOENCODING = 'utf-8';
-  return spawn(bin, args, { cwd, shell: true, env, timeout: 60000 });
 }

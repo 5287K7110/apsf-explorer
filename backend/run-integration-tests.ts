@@ -509,17 +509,18 @@ async function main(): Promise<void> {
         '## Done Criteria\n\n- [x] ガードが機能する\n');
 
       try {
-        // 1 回目（DryRun・await しない）→ 実行中に 2 回目 → 拒否されるはず
+        // 実行登録は execute の同期プロローグで行われるため、await せずに
+        // 2 連続で呼べば 2 回目は決定的に拒否される
+        // （ネイティブ化で DryRun が数 ms になったため sleep 方式は不可）
         const first = bridge.execute({
           runId: tmpRun, command: 'build', provider: 'claude', roles: [], mode: 'apsf-run',
           context: { dryRun: true },
         } as any);
-        await new Promise((r2) => setTimeout(r2, 150));
-        await bridge.execute({
+        const second = bridge.execute({
           runId: tmpRun, command: 'build', provider: 'claude', roles: [], mode: 'apsf-run',
           context: { dryRun: true },
         } as any);
-        await first;
+        await Promise.all([first, second]);
 
         const rejection = events.find(
           (e) => e.type === 'error' && String(e.data?.error).includes('already executing')

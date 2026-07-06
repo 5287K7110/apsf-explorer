@@ -1,27 +1,23 @@
 /**
- * APSF Native Executor — ps1 ラッパーの TypeScript 置き換え
+ * APSF Native Executor — 完全 TypeScript ネイティブ実行
  *
- * 旧構成（Windows 専用）:
- *   apsf-claude-act.ps1 / apsf-claude-build.ps1 / apsf-auto-loop.ps1
- *   （PowerShell がプロンプト組み立て → claude 実行 → 保存）
+ * 依存ゼロ構成（python / apsf CLI / PowerShell いずれも不要）:
+ *   1. プロンプト組み立て : prompt-builder.ts（renderer.py と parity 検証済み 6/6）
+ *   2. AI 実行           : claude/codex を直接 spawn（BUILD はツール有効）
+ *   3. 保存              : write-phase.ts（上書き保護・run_state 遷移・
+ *                          judge advisory — python 版と parity 検証済み 12/12）
+ *   4. ループ            : TS ネイティブ（HUMAN_OWNED_PHASES 停止・max cycles）
  *
- * 新構成（クロスプラットフォーム）:
- *   1. プロンプト取得 : `apsf act <run> --print-prompt`
- *      （specialist 選択・テンプレート合成を含む framework の正規組み立て）
- *   2. AI 実行        : claude -p を直接 spawn（BUILD はツール有効）
- *   3. 保存           : `apsf write-phase <run> --stdin`
- *      （上書き保護・run_state 遷移・イベントログを含む framework の正規永続化）
- *   4. ループ         : TS ネイティブ（PhaseDetector + HUMAN_OWNED_PHASES 停止）
- *
- * 再構築境界の設計判断:
- *   1 と 3 は run 状態を正しく変異させる framework の中核契約であり、
- *   TS で再実装すると drift・状態破壊リスクがあるため `apsf` CLI
- *   （pip 導入・クロスプラットフォーム）を薄く呼ぶ。PowerShell 依存はゼロ。
+ * runs/ ディレクトリへの書き込みは Explorer に一本化されている前提
+ * （python 版 apsf CLI との並用は run 状態の drift を招くため非推奨）。
  */
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import { PhaseDetector, resolveRunDir } from './phase-detector.js';
 import { isHumanPhase, AUTO_OWNED_PHASES, ApsfPhase } from './phases.js';
+import { buildPhasePrompt } from './prompt-builder.js';
+import { writePhase } from './write-phase.js';
+import { resolveFrameworkRoot } from './content-root.js';
 import { StreamEvent } from '../../types/index.js';
 
 export interface NativeExecuteOptions {
@@ -41,10 +37,7 @@ interface CmdResult {
 export class NativeApsfExecutor extends EventEmitter {
   private cancelled = false;
 
-  constructor(
-    private apsfRoot: string,
-    private apsfBin: string = process.env.APSF_BIN || 'apsf'
-  ) {
+  constructor(private apsfRoot: string) {
     super();
   }
 
@@ -101,17 +94,11 @@ export class NativeApsfExecutor extends EventEmitter {
     });
   }
 
-  /** `apsf act <run> --print-prompt` でフェーズプロンプトを取得 */
-  private async getPrompt(runId: string): Promise<string> {
-    const res = await this.run(this.apsfBin, ['act', runId, '--print-prompt'], {
-      timeoutMs: 60000,
-    });
-    if (res.code !== 0 || !res.stdout.trim()) {
-      throw new Error(
-        `apsf act --print-prompt failed (exit=${res.code}): ${res.stderr.slice(0, 300)}`
-      );
-    }
-    return res.stdout;
+  /** フェーズプロンプトの組み立て（TS ネイティブ・renderer parity 検証済み） */
+  private getPrompt(runId: string): string {
+    const runDir = resolveRunDir(this.apsfRoot, runId);
+    if (!runDir) throw new Error(`Run not found: ${runId}`);
+    return buildPhasePrompt(runDir, resolveFrameworkRoot(this.apsfRoot)).prompt;
   }
 
   /** claude -p でプロンプトを実行（BUILD はツール有効） */
@@ -161,17 +148,11 @@ export class NativeApsfExecutor extends EventEmitter {
     return res.stdout;
   }
 
-  /** `apsf write-phase <run> --stdin` で正規永続化 */
-  private async savePhaseOutput(runId: string, content: string): Promise<void> {
-    const res = await this.run(this.apsfBin, ['write-phase', runId, '--stdin'], {
-      stdin: content,
-      timeoutMs: 60000,
-    });
-    if (res.code !== 0) {
-      throw new Error(
-        `apsf write-phase failed (exit=${res.code}): ${(res.stderr || res.stdout).slice(0, 300)}`
-      );
-    }
+  /** 正規永続化（TS ネイティブ write-phase — 上書き保護・遷移・advisory 込み） */
+  private savePhaseOutput(runId: string, content: string): void {
+    const runDir = resolveRunDir(this.apsfRoot, runId);
+    if (!runDir) throw new Error(`Run not found: ${runId}`);
+    writePhase(runDir, content);
   }
 
   /** 現在フェーズ（TS ネイティブ検出・parity 検証済み） */
@@ -199,10 +180,10 @@ export class NativeApsfExecutor extends EventEmitter {
       throw new Error(`Phase ${info.phase} is not auto-executable`);
     }
 
-    this.progress(runId, `[native] phase=${info.phase} → assembling prompt (apsf act --print-prompt)`, {
+    this.progress(runId, `[native] phase=${info.phase} → assembling prompt (native builder)`, {
       phase: info.phase,
     });
-    const prompt = await this.getPrompt(runId);
+    const prompt = this.getPrompt(runId);
 
     if (dryRun) {
       this.progress(runId, `[native] DryRun — prompt assembled (${prompt.length} chars). Not executing AI.`, {
@@ -214,10 +195,10 @@ export class NativeApsfExecutor extends EventEmitter {
 
     const output = await this.invokeAI(runId, info.phase, prompt, provider, timeoutMs);
 
-    this.progress(runId, `[native] saving ${info.fileToWrite} (apsf write-phase --stdin)`, {
+    this.progress(runId, `[native] saving ${info.fileToWrite} (native write-phase)`, {
       phase: info.phase,
     });
-    await this.savePhaseOutput(runId, output);
+    this.savePhaseOutput(runId, output);
 
     return this.detectPhase(runId).phase;
   }
