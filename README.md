@@ -31,6 +31,24 @@ Most AI agent tools optimize for full autonomy. APSF Explorer optimizes for
 - 🧭 **Deterministic phase detection** — run state is derived from files +
   `run_state.json` with a validated transition table
 
+### Does the quality gate actually work? A true story
+
+During v0.2.0 verification we ran a full cycle entirely on `codex`. The task
+asked for a file with a specific Japanese heading. The **Builder** (codex)
+wrote it — but with an English heading, and it also touched a file outside
+the declared scope. The **Critic** (also codex, same model, read-only sandbox)
+reviewed the build against the goal and flagged both deviations as Critical:
+
+> "`codex_smoke.md` does not contain the requested heading […] the build also
+> reports changing `build.md`, which conflicts with the goal's explicit scope
+> constraint." — recommendation: **Return to Build**
+
+The loop then stopped at `IMPROVE_NEEDED` and handed the final call to the
+human Judge. No prompt trickery, no second model — just role separation with
+independent context. The same model that made the mistake caught the mistake,
+and the framework made sure a human decided what to do about it. That's the
+entire thesis of this project, demonstrated by accident.
+
 ## Architecture
 
 ```
