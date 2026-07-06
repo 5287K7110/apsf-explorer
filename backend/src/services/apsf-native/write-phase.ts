@@ -251,15 +251,17 @@ export function writePhase(
     }
   }
 
-  // 4. 保存（python write_text と同じ OS ネイティブ改行）
-  const osContent = os.EOL === '\n' ? content : content.replace(/\n/g, os.EOL);
-  atomicWrite(path.join(runDir, target.file), osContent);
-
-  // 5. review.md の場合は advisory を先に検証・抽出（無効なら遷移させない）
+  // 4. review.md は保存前に advisory を検証・抽出
+  //    （保存後に検証すると、無効な内容で review.md が汚染されたまま
+  //    エラーになる — codex full-cycle 検証で発見した実バグの修正）
   let reviewAdvisory: { recommendation: string; human_owned_blocker: boolean } | null = null;
   if (target.file === 'review.md') {
     reviewAdvisory = parseReviewJudgeAdvisory(content);
   }
+
+  // 5. 保存（python write_text と同じ OS ネイティブ改行）
+  const osContent = os.EOL === '\n' ? content : content.replace(/\n/g, os.EOL);
+  atomicWrite(path.join(runDir, target.file), osContent);
 
   // 6. run_state 遷移
   const nextPhase = nextPhaseAfterWrite(runDir, phase);

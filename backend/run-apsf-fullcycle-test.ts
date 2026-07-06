@@ -35,7 +35,7 @@ async function main(): Promise<void> {
         type: 'execute',
         payload: {
           runId: RUN,
-          provider: 'claude',
+          provider: (process.env.FC_PROVIDER as any) || 'claude',
           command: 'full-cycle',
           roles: [],
           mode: 'apsf-run',

@@ -13,10 +13,14 @@
  */
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { PhaseDetector, resolveRunDir } from './phase-detector.js';
 import { isHumanPhase, AUTO_OWNED_PHASES, ApsfPhase } from './phases.js';
 import { buildPhasePrompt } from './prompt-builder.js';
-import { writePhase } from './write-phase.js';
+import { writePhase, nextPhaseAfterWrite } from './write-phase.js';
+import { transition } from './run-state.js';
 import { resolveFrameworkRoot } from './content-root.js';
 import { StreamEvent } from '../../types/index.js';
 
@@ -101,7 +105,7 @@ export class NativeApsfExecutor extends EventEmitter {
     return buildPhasePrompt(runDir, resolveFrameworkRoot(this.apsfRoot)).prompt;
   }
 
-  /** claude -p でプロンプトを実行（BUILD はツール有効） */
+  /** AI CLI でプロンプトを実行（BUILD はツール有効） */
   private async invokeAI(
     runId: string,
     phase: ApsfPhase,
@@ -114,9 +118,23 @@ export class NativeApsfExecutor extends EventEmitter {
 
     let command: string;
     let args: string[];
+    // codex の stdout はセッションログ混じりのため、最終メッセージは
+    // --output-last-message で temp ファイルに受け取る
+    let codexOutFile: string | null = null;
     if (provider === 'codex') {
       command = 'codex';
-      args = ['exec', '--skip-git-repo-check', '-'];
+      codexOutFile = path.join(
+        os.tmpdir(),
+        `apsf-codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`
+      );
+      // BUILD はワークスペース書込可、PLAN/REVIEW は読み取りのみ
+      // （claude 側の acceptEdits / dontAsk と同じ思想）
+      args = [
+        'exec', '--skip-git-repo-check',
+        '-s', isBuild ? 'workspace-write' : 'read-only',
+        '-o', `"${codexOutFile}"`,
+        '-',
+      ];
     } else {
       command = 'claude';
       args = [
@@ -132,20 +150,27 @@ export class NativeApsfExecutor extends EventEmitter {
 
     this.progress(runId, `[native] invoking ${command} (phase=${phase}, tools=${isBuild ? 'on' : 'off'})`, { phase });
 
-    const res = await this.run(command, args, {
-      stdin: prompt,
-      timeoutMs,
-      onStdout: (chunk) => this.progress(runId, chunk, { phase, stream: 'ai' }),
-    });
-    if (res.code !== 0) {
-      throw new Error(
-        `${command} exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`
-      );
+    try {
+      const res = await this.run(command, args, {
+        stdin: prompt,
+        timeoutMs,
+        onStdout: (chunk) => this.progress(runId, chunk, { phase, stream: 'ai' }),
+      });
+      if (res.code !== 0) {
+        throw new Error(
+          `${command} exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`
+        );
+      }
+      const output = codexOutFile && fs.existsSync(codexOutFile)
+        ? fs.readFileSync(codexOutFile, 'utf-8')
+        : res.stdout;
+      if (!output.trim()) {
+        throw new Error(`${command} returned empty output`);
+      }
+      return output;
+    } finally {
+      if (codexOutFile) fs.rmSync(codexOutFile, { force: true });
     }
-    if (!res.stdout.trim()) {
-      throw new Error(`${command} returned empty output`);
-    }
-    return res.stdout;
   }
 
   /** 正規永続化（TS ネイティブ write-phase — 上書き保護・遷移・advisory 込み） */
@@ -195,10 +220,29 @@ export class NativeApsfExecutor extends EventEmitter {
 
     const output = await this.invokeAI(runId, info.phase, prompt, provider, timeoutMs);
 
-    this.progress(runId, `[native] saving ${info.fileToWrite} (native write-phase)`, {
-      phase: info.phase,
-    });
-    this.savePhaseOutput(runId, output);
+    // ツール有効の BUILD では、AI が対象ファイル（build.md）を直接書き込む
+    // ことがある（codex workspace-write / ps1 時代の claude build と同じ流儀）。
+    // その場合 stdout を二重保存せず、canonical state の前進のみ行う
+    const runDir = resolveRunDir(this.apsfRoot, runId)!;
+    if (new PhaseDetector(runDir).isFilledPublic(info.fileToWrite)) {
+      this.progress(
+        runId,
+        `[native] ${info.fileToWrite} already written by AI tools — syncing state only`,
+        { phase: info.phase }
+      );
+      const next = nextPhaseAfterWrite(runDir, info.phase);
+      const result = transition(runDir, {
+        toPhase: next,
+        actor: 'system',
+        reason: 'builder wrote target file directly via tools',
+      });
+      if (!result.success) throw new Error(result.error ?? 'state sync failed');
+    } else {
+      this.progress(runId, `[native] saving ${info.fileToWrite} (native write-phase)`, {
+        phase: info.phase,
+      });
+      this.savePhaseOutput(runId, output);
+    }
 
     return this.detectPhase(runId).phase;
   }
