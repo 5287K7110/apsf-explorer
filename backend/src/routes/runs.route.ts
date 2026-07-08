@@ -177,6 +177,33 @@ router.post('/apsf/:id/write-phase', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/runs/apsf/:id/judge
+ * Judge 裁定: { decision: 'Accept' | 'Return to Build' | 'Return to Plan', reason?: string }
+ * Return 系は reason 必須。IMPROVE_NEEDED 以外は 409。
+ */
+router.post('/apsf/:id/judge', (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const { decision, reason } = req.body || {};
+    if (!decision || typeof decision !== 'string') {
+      res.status(400).json({ error: 'decision (string) is required' });
+      return;
+    }
+    const result = apsfRun.judgeDecision(req.params.id, decision, reason);
+    res.json({ runId: req.params.id, ...result });
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && (error as any).statusCode === 409 ? 409 : 400;
+    res.status(status).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * GET /api/runs/apsf/:id/advisory
  * judge_advisory.json（IMPROVE_NEEDED での Judge 推奨）を取得
  */

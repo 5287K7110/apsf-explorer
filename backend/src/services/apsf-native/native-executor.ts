@@ -174,10 +174,14 @@ export class NativeApsfExecutor extends EventEmitter {
   }
 
   /** 正規永続化（TS ネイティブ write-phase — 上書き保護・遷移・advisory 込み） */
-  private savePhaseOutput(runId: string, content: string): void {
+  private savePhaseOutput(
+    runId: string,
+    content: string,
+    force?: { forceReason: string }
+  ): void {
     const runDir = resolveRunDir(this.apsfRoot, runId);
     if (!runDir) throw new Error(`Run not found: ${runId}`);
-    writePhase(runDir, content);
+    writePhase(runDir, content, force ? { force: true, forceReason: force.forceReason } : {});
   }
 
   /** 現在フェーズ（TS ネイティブ検出・parity 検証済み） */
@@ -218,13 +222,24 @@ export class NativeApsfExecutor extends EventEmitter {
       return info.phase;
     }
 
+    // rerun 検出（Judge の Return to Build/Plan 後は対象ファイルが前サイクルの
+    // 内容で埋まっている）: 実行前の mtime を記録し、AI がツールで直接更新した
+    // のか・前回の残存内容なのかを区別する
+    const runDir = resolveRunDir(this.apsfRoot, runId)!;
+    const targetPath = path.join(runDir, info.fileToWrite);
+    const mtimeBefore = fs.existsSync(targetPath) ? fs.statSync(targetPath).mtimeMs : null;
+    const hadContentBefore = new PhaseDetector(runDir).hasAnyContent(info.fileToWrite);
+
     const output = await this.invokeAI(runId, info.phase, prompt, provider, timeoutMs);
 
     // ツール有効の BUILD では、AI が対象ファイル（build.md）を直接書き込む
     // ことがある（codex workspace-write / ps1 時代の claude build と同じ流儀）。
-    // その場合 stdout を二重保存せず、canonical state の前進のみ行う
-    const runDir = resolveRunDir(this.apsfRoot, runId)!;
-    if (new PhaseDetector(runDir).isFilledPublic(info.fileToWrite)) {
+    // その場合 stdout を二重保存せず、canonical state の前進のみ行う。
+    // 実行中に mtime が変わったファイルのみ「AI が直接書いた」と判定する
+    // （rerun で残存する前回内容を誤って「AI が書いた」と見なさないため）
+    const mtimeAfter = fs.existsSync(targetPath) ? fs.statSync(targetPath).mtimeMs : null;
+    const writtenByTools = mtimeAfter !== null && mtimeAfter !== mtimeBefore;
+    if (writtenByTools && new PhaseDetector(runDir).isFilledPublic(info.fileToWrite)) {
       this.progress(
         runId,
         `[native] ${info.fileToWrite} already written by AI tools — syncing state only`,
@@ -241,7 +256,15 @@ export class NativeApsfExecutor extends EventEmitter {
       this.progress(runId, `[native] saving ${info.fileToWrite} (native write-phase)`, {
         phase: info.phase,
       });
-      this.savePhaseOutput(runId, output);
+      // rerun（Judge 差し戻し後の再実行）では対象ファイルに前回内容が残るため、
+      // 上書き保護を監査記録付きで迂回する
+      this.savePhaseOutput(
+        runId,
+        output,
+        hadContentBefore
+          ? { forceReason: `rerun of ${info.phase}: overwrite previous ${info.fileToWrite}` }
+          : undefined
+      );
     }
 
     return this.detectPhase(runId).phase;

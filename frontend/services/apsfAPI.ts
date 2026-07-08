@@ -11,11 +11,6 @@ export interface ApsfRunsResponse {
   runs: string[];
 }
 
-export interface ApsfPhaseResponse {
-  runId: string;
-  phase: string;
-}
-
 export interface ApsfExecuteResponse {
   runId: string;
   status: string;
@@ -43,15 +38,28 @@ export interface ApsfAdvisory {
   [key: string]: unknown;
 }
 
+export type ApsfJudgeDecision = 'Accept' | 'Return to Build' | 'Return to Plan';
+
+export interface ApsfJudgeResult {
+  runId: string;
+  decision: ApsfJudgeDecision;
+  phaseBefore: string;
+  phaseAfter: string;
+  reasonFile: string | null;
+  advisoryRecommendation: string | null;
+  matchesAdvisory: boolean | null;
+  supersededFiles: string[];
+}
+
 export const apsfAPI = {
   /** 実 APSF の run 一覧 */
   getRuns(): Promise<ApsfRunsResponse> {
     return apiClient.get<ApsfRunsResponse>('/runs/apsf');
   },
 
-  /** 実 `apsf next --phase-only` によるフェーズ検出 */
-  getPhase(runId: string): Promise<ApsfPhaseResponse> {
-    return apiClient.get<ApsfPhaseResponse>(
+  /** 実 `apsf next --phase-only` によるフェーズ検出（fileToWrite / nextRole 含む） */
+  getPhase(runId: string): Promise<ApsfPhaseInfo> {
+    return apiClient.get<ApsfPhaseInfo>(
       `/runs/apsf/${encodeURIComponent(runId)}/phase`
     );
   },
@@ -76,6 +84,14 @@ export const apsfAPI = {
     return apiClient.post<{ runId: string; fileWritten: string; phase: string }>(
       `/runs/apsf/${encodeURIComponent(runId)}/write-phase`,
       { content }
+    );
+  },
+
+  /** Judge 裁定（Accept / Return to Build / Return to Plan） */
+  judgeDecision(runId: string, decision: ApsfJudgeDecision, reason?: string) {
+    return apiClient.post<ApsfJudgeResult>(
+      `/runs/apsf/${encodeURIComponent(runId)}/judge`,
+      { decision, reason }
     );
   },
 

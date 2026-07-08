@@ -181,10 +181,16 @@ async function main(): Promise<void> {
 
     await test('Select run → real phase detection (`apsf next`) shows badge', async () => {
       await page.locator('[data-testid="apsf-run-list"] button').first().click();
-      const badge = page.locator('[data-testid="apsf-phase"]');
-      await badge.waitFor({ state: 'visible', timeout: 30000 });
-      const text = (await badge.textContent())?.trim() || '';
-      // 実フェーズトークン（COMPLETE / PLAN_NEEDED 等）
+      // クリック直後はプレースホルダー "—" が一瞬表示される（detectPhase は
+      // 非同期）ため、実フェーズトークンが入るまで待つ
+      await page.waitForFunction(
+        () => /[A-Z_]{4,}/.test(
+          document.querySelector('[data-testid="apsf-phase"]')?.textContent ?? ''
+        ),
+        undefined,
+        { timeout: 30000 }
+      );
+      const text = (await page.locator('[data-testid="apsf-phase"]').textContent())?.trim() || '';
       assert(/[A-Z_]{4,}/.test(text), `unexpected phase badge: "${text}"`);
     });
 
@@ -225,9 +231,67 @@ async function main(): Promise<void> {
       );
     });
 
+    // ---- Judge 裁定（Return to Build）の一連操作 ----
+    // BUILD/REVIEW は AI フェーズのため、実 backend REST（実 write-phase）で
+    // IMPROVE_NEEDED まで駆動し、裁定の UI 操作だけを実ブラウザで検証する
+    const apsfRoot = process.env.APSF_ROOT || 'C:/Users/PC_User/PRJ/ai-problem-solving-framework';
+
+    await test('Judge decision UI: Return to Build → BUILD_NEEDED badge + build_review.md', async () => {
+      // 実 JWT を取得して REST で BUILD/REVIEW フェーズを書き進める
+      const login = await fetch('http://localhost:3001/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'e2e@test.com', password: 'secret123' }),
+      });
+      const { token } = await login.json();
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const writes = [
+        '# Build\n\n## Work Done\n\n- E2E 用ダミー成果物。\n- 実装は存在しない。\n\n' +
+        '## Notes\n\n- Judge 裁定 E2E の前段。\n- write-phase 経由で遷移する。\n',
+        '# Review\n\n## Findings\n\n- E2E 用レビュー本文。\n- 実 write-phase 経由で保存。\n\n' +
+        '## Assessment\n\n- Judge が UI で裁定する。\n\n' +
+        '```apsf-judge-advisory\n{"recommendation": "Return to Build", "human_owned_blocker": false}\n```\n',
+      ];
+      for (const content of writes) {
+        const w = await fetch(`http://localhost:3001/api/runs/apsf/${E2E_RUN_FULL}/write-phase`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content }),
+        });
+        assert(w.status === 200, `write-phase failed: ${await w.text()}`);
+      }
+
+      // ブラウザ側: フェーズ再検出 → IMPROVE_NEEDED + 裁定 UI
+      await page.click('button[title="Re-detect phase"]');
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="apsf-phase"]')?.textContent?.includes('IMPROVE_NEEDED'),
+        undefined,
+        { timeout: 30000 }
+      );
+      const judgePanel = page.locator('[data-testid="apsf-judge"]');
+      await judgePanel.waitFor({ state: 'visible', timeout: 10000 });
+
+      // 理由なしでは Return ボタンは無効
+      assert(await page.locator('[data-testid="apsf-judge-return-build"]').isDisabled(),
+        'Return to Build should be disabled without a reason');
+
+      await page.fill('[data-testid="apsf-judge-reason"]', 'E2E: 検証手順が不足しているため差し戻す。');
+      await page.click('[data-testid="apsf-judge-return-build"]');
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="apsf-phase"]')?.textContent?.includes('BUILD_NEEDED'),
+        undefined,
+        { timeout: 30000 }
+      );
+
+      // 差し戻し理由が成果物化されていること
+      const { readFileSync, existsSync } = await import('fs');
+      const reviewPath = `${apsfRoot}/runs/work/${E2E_RUN_FULL}/build_review.md`;
+      assert(existsSync(reviewPath), 'build_review.md not created');
+      assert(readFileSync(reviewPath, 'utf-8').includes('検証手順が不足'), 'reason missing in build_review.md');
+    });
+
     // E2E で作成した一時 run を削除
     const { rmSync } = await import('fs');
-    const apsfRoot = process.env.APSF_ROOT || 'C:/Users/PC_User/PRJ/ai-problem-solving-framework';
     rmSync(`${apsfRoot}/runs/work/${E2E_RUN_FULL}`, { recursive: true, force: true });
   } else {
     console.log('⏭️  SKIP  post-login E2E (backend not running on 3001)');

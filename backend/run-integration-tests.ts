@@ -533,6 +533,232 @@ async function main(): Promise<void> {
         rmRun(tmpDir, { recursive: true, force: true });
       }
     });
+    // ---- Judge 裁定（IMPROVE_NEEDED → Accept / Return to Build / Return to Plan） ----
+
+    const REVIEW_WITH_ADVISORY =
+      '# Review\n\n## Findings\n\n- 統合テスト用のレビュー本文。\n- 実 write-phase 経由で保存される。\n\n' +
+      '## Assessment\n\n- 判定はテストシナリオに応じて Judge が裁定する。\n\n' +
+      '```apsf-judge-advisory\n{"recommendation": "Return to Build", "human_owned_blocker": false}\n```\n';
+
+    const TEST_BUILD_MD =
+      '# Build\n\n## Work Done\n\n- テスト用のダミー成果物を作成した。\n- 実装は存在しない（裁定検証用）。\n\n' +
+      '## Notes\n\n- Judge 裁定テストの前段フェーズ。\n- write-phase 経由で REVIEW_NEEDED へ遷移する。\n';
+
+    async function writePhaseApi(runName: string, file: string, content: string): Promise<void> {
+      const w = await fetch(`${BASE}/api/runs/apsf/${runName}/write-phase`, {
+        method: 'POST',
+        headers: authHeader(),
+        body: JSON.stringify({ content }),
+      });
+      const body = await w.json();
+      assert(w.status === 200, `write ${file} failed: ${JSON.stringify(body).slice(0, 200)}`);
+    }
+
+    async function phaseOf(runName: string): Promise<string> {
+      const p = await fetch(`${BASE}/api/runs/apsf/${runName}/phase`, { headers: authHeader() });
+      return (await p.json()).phase;
+    }
+
+    /** 一時 run を API 経由で IMPROVE_NEEDED まで駆動する（light/heavy 両対応） */
+    async function driveToImprove(runName: string, opts: { light: boolean } = { light: true }): Promise<void> {
+      const create = await fetch(`${BASE}/api/runs/apsf`, {
+        method: 'POST',
+        headers: authHeader(),
+        body: JSON.stringify({ runName, light: opts.light, taxonomy: 'work' }),
+      });
+      assert(create.status === 200, `create failed: ${await create.text()}`);
+      const writes: Array<[string, string]> = opts.light
+        ? [
+            ['task.md',
+              '# Task\n\n## What\n\nJudge 裁定の統合テスト用 run。\n\n' +
+              '## Context\n\n- 3 経路（Accept/Return to Build/Return to Plan）の検証\n- 実フェーズ遷移を通す\n\n' +
+              '## Done Criteria\n\n- [x] IMPROVE_NEEDED に到達する\n'],
+          ]
+        : [
+            ['execution-assignment.md',
+              '# Execution Assignment\n\n## Roles\n\n- Planner: テスト\n- Builder: テスト\n- Critic: テスト\n- Judge: テスト\n'],
+            ['goal.md',
+              '# Goal\n\n## Goal Statement\n\nJudge 裁定（Return to Plan）の heavy run 統合テスト。\n\n' +
+              '## Success Criteria\n\n- PLAN_NEEDED へ差し戻せる\n- plan_review.md に理由が残る\n- 下流成果物が退避される\n'],
+            ['plan.md',
+              '# Plan\n\n## Approach\n\n- テスト用のダミー計画。\n- 実装はしない。\n\n' +
+              '## Steps\n\n- ダミー build を書く\n- ダミー review を書く\n'],
+          ];
+      writes.push(['build.md', TEST_BUILD_MD], ['review.md', REVIEW_WITH_ADVISORY]);
+      for (const [file, content] of writes) {
+        await writePhaseApi(runName, file, content);
+      }
+      assert((await phaseOf(runName)) === 'IMPROVE_NEEDED', 'did not reach IMPROVE_NEEDED');
+    }
+
+    const judgeRuns = {
+      build: '2026-07-05-991_work_explorer-judge-build-test',
+      plan: '2026-07-05-992_work_explorer-judge-plan-test',
+      accept: '2026-07-05-993_work_explorer-judge-accept-test',
+    };
+    const { rmSync: rmJudgeRun, readFileSync: readJudgeFile, existsSync: judgeFileExists } = await import('fs');
+    const rmJudgeRuns = () => {
+      for (const name of Object.values(judgeRuns)) {
+        rmJudgeRun(resolve(apsfRoot, 'runs/work', name), { recursive: true, force: true });
+      }
+    };
+    rmJudgeRuns();
+
+    try {
+      await test('APSF Judge: Return to Build → BUILD_NEEDED + build_review.md + 下流退避', async () => {
+        await driveToImprove(judgeRuns.build);
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.build}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Return to Build', reason: 'ビルドの検証手順が不足しているため差し戻す。' }),
+        });
+        const body = await r.json();
+        assert(r.status === 200, `judge failed: ${JSON.stringify(body).slice(0, 200)}`);
+        assert(body.phaseAfter === 'BUILD_NEEDED', `phaseAfter: ${body.phaseAfter}`);
+        assert(body.reasonFile === 'build_review.md', `reasonFile: ${body.reasonFile}`);
+        assert(body.matchesAdvisory === true, `matchesAdvisory: ${body.matchesAdvisory}`);
+        // 理由ファイルの実体
+        const runDir = resolve(apsfRoot, 'runs/work', judgeRuns.build);
+        const reviewPath = resolve(runDir, 'build_review.md');
+        assert(judgeFileExists(reviewPath), 'build_review.md not created');
+        const content = readJudgeFile(reviewPath, 'utf-8');
+        assert(content.includes('ビルドの検証手順が不足'), 'reason missing in build_review.md');
+        assert(content.includes('Return to Build'), 'decision missing in build_review.md');
+        // 下流成果物の退避（残すと advisory 検出が再ビルド/再レビューを追い越す）
+        assert(Array.isArray(body.supersededFiles) && body.supersededFiles.length === 2,
+          `supersededFiles: ${JSON.stringify(body.supersededFiles)}`);
+        assert(!judgeFileExists(resolve(runDir, 'build.md')), 'stale build.md not superseded');
+        assert(!judgeFileExists(resolve(runDir, 'review.md')), 'stale review.md not superseded');
+        assert(!judgeFileExists(resolve(runDir, 'judge_advisory.json')), 'stale judge_advisory.json not removed');
+        for (const f of body.supersededFiles) {
+          assert(judgeFileExists(resolve(runDir, f)), `superseded file missing: ${f}`);
+        }
+        // 遷移後の実フェーズ検出（canonical と advisory の両方が BUILD_NEEDED）
+        assert((await phaseOf(judgeRuns.build)) === 'BUILD_NEEDED', 'detected phase is not BUILD_NEEDED');
+      });
+
+      await test('APSF Judge: 差し戻し後にループが完走する（再 BUILD → 再 REVIEW → IMPROVE）', async () => {
+        // 差し戻し済み run で build.md → review.md を書き直し、advisory が再生成されること
+        await writePhaseApi(judgeRuns.build, 'build.md (round 2)', TEST_BUILD_MD);
+        assert((await phaseOf(judgeRuns.build)) === 'REVIEW_NEEDED', 'rebuild did not reach REVIEW_NEEDED');
+        await writePhaseApi(judgeRuns.build, 'review.md (round 2)', REVIEW_WITH_ADVISORY);
+        assert((await phaseOf(judgeRuns.build)) === 'IMPROVE_NEEDED', 're-review did not reach IMPROVE_NEEDED');
+        const advisoryPath = resolve(apsfRoot, 'runs/work', judgeRuns.build, 'judge_advisory.json');
+        assert(judgeFileExists(advisoryPath), 'judge_advisory.json not regenerated after re-review');
+      });
+
+      await test('APSF Judge: repeated judge call after loop closes → 200 then 409 at BUILD', async () => {
+        // ループ完走後は再び IMPROVE_NEEDED — 2 回目の Return to Build も成立する（repeat 追記）
+        const again = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.build}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Return to Build', reason: '2 周目の差し戻し検証。理由は前回と同一ファイルに追記される。' }),
+        });
+        const body = await again.json();
+        assert(again.status === 200, `second judge failed: ${JSON.stringify(body).slice(0, 200)}`);
+        const content = readJudgeFile(resolve(apsfRoot, 'runs/work', judgeRuns.build, 'build_review.md'), 'utf-8');
+        assert(content.includes('ビルドの検証手順が不足') && content.includes('2 周目の差し戻し検証'),
+          'build_review.md should accumulate both decisions');
+        // この時点で run は 2 周目の BUILD_NEEDED — 裁定は 409 で拒否される
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.build}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Return to Build', reason: '二重裁定の検証。' }),
+        });
+        assert(r.status === 409, `expected 409, got ${r.status}`);
+      });
+
+      await test('APSF Judge: Return to Plan (heavy) → PLAN_NEEDED + plan_review.md + 下流退避', async () => {
+        await driveToImprove(judgeRuns.plan, { light: false });
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.plan}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Return to Plan', reason: '計画の前提が崩れているため計画からやり直す。' }),
+        });
+        const body = await r.json();
+        assert(r.status === 200, `judge failed: ${JSON.stringify(body).slice(0, 200)}`);
+        assert(body.phaseAfter === 'PLAN_NEEDED', `phaseAfter: ${body.phaseAfter}`);
+        assert(body.reasonFile === 'plan_review.md', `reasonFile: ${body.reasonFile}`);
+        // advisory は Return to Build 推奨 → 不一致が記録される
+        assert(body.matchesAdvisory === false, `matchesAdvisory: ${body.matchesAdvisory}`);
+        const runDir = resolve(apsfRoot, 'runs/work', judgeRuns.plan);
+        assert(judgeFileExists(resolve(runDir, 'plan_review.md')), 'plan_review.md not created');
+        assert(readJudgeFile(resolve(runDir, 'plan_review.md'), 'utf-8').includes('計画の前提が崩れている'), 'reason missing');
+        // plan / build / review が退避される
+        assert(body.supersededFiles.length === 3, `supersededFiles: ${JSON.stringify(body.supersededFiles)}`);
+        for (const f of ['plan.md', 'build.md', 'review.md']) {
+          assert(!judgeFileExists(resolve(runDir, f)), `stale ${f} not superseded`);
+        }
+        assert((await phaseOf(judgeRuns.plan)) === 'PLAN_NEEDED', 'detected phase is not PLAN_NEEDED');
+      });
+
+      await test('APSF Judge: light run への Return to Plan → 400（plan フェーズなし）', async () => {
+        await driveToImprove(judgeRuns.accept);
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.accept}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Return to Plan', reason: 'light run では拒否されるはず。' }),
+        });
+        assert(r.status === 400, `expected 400, got ${r.status}`);
+        assert((await phaseOf(judgeRuns.accept)) === 'IMPROVE_NEEDED', 'phase changed despite 400');
+      });
+
+      await test('APSF Judge: Return without reason → 400', async () => {
+        // judgeRuns.accept は前テストで IMPROVE_NEEDED のまま
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.accept}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Return to Build' }),
+        });
+        assert(r.status === 400, `expected 400, got ${r.status}`);
+        // 400 の裁定は状態を変えないこと
+        const p = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.accept}/phase`, { headers: authHeader() });
+        assert((await p.json()).phase === 'IMPROVE_NEEDED', 'phase changed despite 400');
+      });
+
+      await test('APSF Judge: Accept → no transition, improve.md write → RESULT_NEEDED', async () => {
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.accept}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Accept' }),
+        });
+        const body = await r.json();
+        assert(r.status === 200, `judge failed: ${JSON.stringify(body).slice(0, 200)}`);
+        assert(body.phaseAfter === 'IMPROVE_NEEDED', `Accept should not transition: ${body.phaseAfter}`);
+        // 裁定が session_events.jsonl に記録されること
+        const eventsPath = resolve(apsfRoot, 'runs/work', judgeRuns.accept, 'session_events.jsonl');
+        assert(judgeFileExists(eventsPath), 'session_events.jsonl not created');
+        const events = readJudgeFile(eventsPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+        assert(
+          events.some((e) => e.event_type === 'judge_decision' && e.payload?.decision === 'Accept'),
+          'judge_decision Accept event not recorded'
+        );
+        // 既存フロー: improve.md の記入で RESULT_NEEDED へ
+        const w = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.accept}/write-phase`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({
+            content:
+              '# Improve\n\n## Decision\n\n- Accept（統合テスト）。\n\n' +
+              '## Notes\n\n- 裁定 Accept 経路の検証。\n- 追加改善は不要。\n- write-phase 経由で RESULT_NEEDED へ遷移する。\n',
+          }),
+        });
+        const written = await w.json();
+        assert(w.status === 200, `improve write failed: ${JSON.stringify(written).slice(0, 200)}`);
+        assert(written.phase === 'RESULT_NEEDED', `phase after improve: ${written.phase}`);
+      });
+
+      await test('APSF Judge: invalid decision → 400', async () => {
+        const r = await fetch(`${BASE}/api/runs/apsf/${judgeRuns.build}/judge`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ decision: 'Reject Everything', reason: 'x' }),
+        });
+        assert(r.status === 400, `expected 400, got ${r.status}`);
+      });
+    } finally {
+      rmJudgeRuns();
+    }
   } else {
     console.log(`⏭️  SKIP  APSF framework tests (not found at ${apsfRoot})`);
   }

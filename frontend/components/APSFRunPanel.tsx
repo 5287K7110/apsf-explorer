@@ -3,7 +3,7 @@ import {
   RefreshCw, Play, FolderGit2, CircleDot, Loader2, Plus, Save,
   PenLine, Scale, X,
 } from 'lucide-react';
-import { apsfAPI, ApsfCommand, ApsfAdvisory } from '../services/apsfAPI';
+import { apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
 // フェーズ定義は backend と共有（apsf-native/phases.ts が単一の正）
 import { isHumanPhase } from '../../backend/src/services/apsf-native/phases';
@@ -58,6 +58,9 @@ export const APSFRunPanel: React.FC = () => {
   const [saving, setSaving] = useState(false);
   // Judge advisory
   const [advisory, setAdvisory] = useState<ApsfAdvisory | null>(null);
+  // Judge 裁定（IMPROVE_NEEDED）
+  const [judgeReason, setJudgeReason] = useState('');
+  const [judging, setJudging] = useState(false);
 
   const logEndRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef(selected);
@@ -204,6 +207,45 @@ export const APSFRunPanel: React.FC = () => {
       setEditorContent('');
     } finally {
       setEditorLoading(false);
+    }
+  };
+
+  // Judge 裁定: Accept は improve.md エディタを開く（既存フロー）、
+  // Return 系は理由必須で backend の canonical 遷移（actor=Judge）を実行する
+  const handleJudgeDecision = async (decision: ApsfJudgeDecision) => {
+    if (!selected || judging) return;
+    if (decision === 'Accept') {
+      setJudging(true);
+      try {
+        // 裁定を backend に記録（session_events）してから improve.md 記入へ
+        await apsfAPI.judgeDecision(selected, 'Accept');
+        appendLog('info', '裁定: Accept → improve.md を記入してください');
+        openEditor();
+      } catch (e) {
+        appendLog('error', e instanceof Error ? e.message : 'judge decision failed');
+      } finally {
+        setJudging(false);
+      }
+      return;
+    }
+    const reason = judgeReason.trim();
+    if (!reason) {
+      appendLog('error', `${decision} には理由の記入が必要です`);
+      return;
+    }
+    setJudging(true);
+    try {
+      const res = await apsfAPI.judgeDecision(selected, decision, reason);
+      appendLog(
+        'info',
+        `裁定: ${decision} → phase=${res.phaseAfter}（理由: ${res.reasonFile} に記録）`
+      );
+      setJudgeReason('');
+      detectPhase(selected);
+    } catch (e) {
+      appendLog('error', e instanceof Error ? e.message : 'judge decision failed');
+    } finally {
+      setJudging(false);
     }
   };
 
@@ -386,6 +428,53 @@ export const APSFRunPanel: React.FC = () => {
                     {advisory.ownership_status !== undefined && (
                       <p>ownership: {String(advisory.ownership_status)}</p>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Judge 裁定（IMPROVE_NEEDED）: Accept / Return to Build / Return to Plan */}
+              {phase === 'IMPROVE_NEEDED' && (
+                <div className="mt-3 p-3 bg-slate-800/40 border border-amber-800/60 rounded-lg space-y-2" data-testid="apsf-judge">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-200">
+                    <Scale size={12} /> Judge Decision
+                    <span className="text-slate-500 font-normal">
+                      Return 系は理由必須（build_review.md / plan_review.md に記録）
+                    </span>
+                  </div>
+                  <textarea
+                    value={judgeReason}
+                    onChange={(e) => setJudgeReason(e.target.value)}
+                    rows={3}
+                    placeholder="差し戻し理由（Return to Build / Return to Plan で必須）"
+                    className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded text-xs text-slate-200 font-mono resize-y focus:border-amber-600 focus:outline-none"
+                    data-testid="apsf-judge-reason"
+                  />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => handleJudgeDecision('Accept')}
+                      disabled={judging}
+                      data-testid="apsf-judge-accept"
+                      className="px-3 py-1.5 bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-semibold rounded transition"
+                    >
+                      Accept
+                    </button>
+                    <button
+                      onClick={() => handleJudgeDecision('Return to Build')}
+                      disabled={judging || !judgeReason.trim()}
+                      data-testid="apsf-judge-return-build"
+                      className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-semibold rounded transition"
+                    >
+                      Return to Build
+                    </button>
+                    <button
+                      onClick={() => handleJudgeDecision('Return to Plan')}
+                      disabled={judging || !judgeReason.trim()}
+                      data-testid="apsf-judge-return-plan"
+                      className="px-3 py-1.5 bg-orange-700 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-semibold rounded transition"
+                    >
+                      Return to Plan
+                    </button>
+                    {judging && <Loader2 className="animate-spin text-slate-400" size={14} />}
                   </div>
                 </div>
               )}

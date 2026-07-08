@@ -6,6 +6,7 @@ import { PhaseDetector, resolveRunDir, PhaseInfo } from './apsf-native/phase-det
 import { NativeApsfExecutor } from './apsf-native/native-executor.js';
 import { startRun } from './apsf-native/run-store.js';
 import { writePhase as nativeWritePhase } from './apsf-native/write-phase.js';
+import { applyJudgeDecision, JudgeDecisionResult } from './apsf-native/judge-decision.js';
 
 /**
  * APSFRunBridge: APSF ワークフローのワークスペース操作層
@@ -250,6 +251,21 @@ export class APSFRunBridge extends EventEmitter {
     if (!runDir) throw new Error(`Run not found: ${runName}`);
     const result = nativeWritePhase(runDir, content);
     return { fileWritten: result.fileWritten, phase: result.phaseAfter };
+  }
+
+  /**
+   * Judge 裁定（Accept / Return to Build / Return to Plan）を適用する。
+   * IMPROVE_NEEDED 以外では JudgeDecisionConflictError（statusCode=409）。
+   */
+  judgeDecision(runName: string, decision: string, reason?: string): JudgeDecisionResult {
+    this.assertRunName(runName);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    // 実行中の run への裁定は状態競合を招くため拒否（実行中ガード再利用）
+    if (activeExecutors.has(runName)) {
+      throw new Error(`Run ${runName} is currently executing. Wait for completion or cancel first.`);
+    }
+    return applyJudgeDecision(runDir, decision, reason);
   }
 
   /** judge_advisory.json を読む（存在しなければ null） */
