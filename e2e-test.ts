@@ -347,6 +347,55 @@ async function main(): Promise<void> {
       await page.selectOption('[data-testid="apsf-transcript-select"]', '');
     });
 
+    await test('Artifact viewer: review.md を開いて advisory ブロックが表示される', async () => {
+      // E2E 一時 run に review.md を決定的に生成する（特定ローカル run に依存しない）。
+      // 現時点の E2E run は Return to Build 後の BUILD_NEEDED — build → review を REST で書き進める
+      const login2 = await fetch('http://localhost:3001/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'e2e@test.com', password: 'secret123' }),
+      });
+      const { token: token2 } = await login2.json();
+      const headers2 = { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' };
+      const artifactWrites = [
+        '# Build\n\n## Work Done\n\n- Artifact viewer E2E 用の再ビルド。\n- 差し戻し理由に対応した。\n\n' +
+        '## Notes\n\n- ビューア検証の前段。\n- write-phase 経由で遷移する。\n',
+        '# Review\n\n## Findings\n\n- Artifact viewer E2E 用レビュー。\n- 内容はダミー。\n\n' +
+        '## Assessment\n\n- 表示検証のみが目的。\n\n' +
+        '```apsf-judge-advisory\n{"recommendation": "Accept", "human_owned_blocker": false}\n```\n',
+      ];
+      for (const content of artifactWrites) {
+        const w = await fetch(`http://localhost:3001/api/runs/apsf/${E2E_RUN_FULL}/write-phase`, {
+          method: 'POST',
+          headers: headers2,
+          body: JSON.stringify({ content }),
+        });
+        assert(w.status === 200, `write-phase failed: ${await w.text()}`);
+      }
+
+      // ブラウザ側: 再検出 → review.md タブが出る
+      await page.click('button[title="Re-detect phase"]');
+      const tab = page.locator('[data-testid="apsf-artifact-tab-review.md"]');
+      await tab.waitFor({ state: 'visible', timeout: 15000 });
+      await tab.click();
+      // レンダリング済み Markdown に advisory ブロックの中身（JSON）が含まれる。
+      // NOTE: フェンスの言語タグ（apsf-judge-advisory）はコードブロックの
+      // className になり textContent には残らないため、中身で判定する
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="apsf-artifact-content"]')
+          ?.textContent?.includes('"recommendation"'),
+        undefined,
+        { timeout: 15000 }
+      );
+      const hasAdvisoryBlock = await page
+        .locator('[data-testid="apsf-artifact-content"] code.language-apsf-judge-advisory')
+        .count();
+      assert(hasAdvisoryBlock > 0, 'advisory code block not rendered as fenced block');
+      // 見出しが h1/h2 としてレンダリングされている（生テキストではない）
+      const headings = await page.locator('[data-testid="apsf-artifact-content"] h1, [data-testid="apsf-artifact-content"] h2').count();
+      assert(headings > 0, 'markdown headings not rendered');
+    });
+
     // E2E で作成した一時 run を削除
     const { rmSync } = await import('fs');
     rmSync(`${apsfRoot}/runs/work/${E2E_RUN_FULL}`, { recursive: true, force: true });

@@ -40,11 +40,17 @@ import {
 /** run 名の許容形式（YYYY-MM-DD(-NNN)_case_topic）— パス片として使うため厳格に検証 */
 export const RUN_NAME_RE = /^\d{4}-\d{2}-\d{2}(-\d{3})?_[A-Za-z0-9._-]+$/;
 
-/** phase として読み書きを許可するファイル名（ホワイトリスト） */
+/**
+ * phase として読み書きを許可するファイル名（ホワイトリスト）。
+ * *_review.md 系は Judge 差し戻し理由等の読み取り用（書き込みは
+ * write-phase の PHASE_TARGET が現在フェーズの対象のみに制約する）
+ */
 export const PHASE_FILES = [
   'task.md', 'goal.md', 'execution-assignment.md', 'plan.md', 'build.md',
   'review.md', 'improve-plan.md', 'improve.md', 'verify.md', 'result.md',
   'handoff.md', 'transcript.md',
+  'plan_review.md', 'build_review.md', 'review_review.md', 'improve_review.md',
+  'model-assignment.md',
 ] as const;
 
 /**
@@ -120,6 +126,20 @@ export class APSFRunBridge extends EventEmitter {
   /** run ディレクトリの絶対パス */
   getRunDir(runName: string): string | null {
     return resolveRunDir(this.apsfRoot, runName);
+  }
+
+  /**
+   * run に実在する読み取り可能な成果物ファイル一覧（成果物ビューア用）。
+   * PhaseDetector の existingFiles ではなく読み取りホワイトリスト
+   * （PHASE_FILES）を基準にする — detector の KNOWN_FILES は python parity
+   * を維持する検出用リストであり、閲覧対象の定義とは責務が異なる
+   * （review_review.md のように detector 未走査でも閲覧可能にすべきものがある）
+   */
+  listArtifacts(runName: string): string[] {
+    this.assertRunName(runName);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    return PHASE_FILES.filter((f) => fs.existsSync(path.join(runDir, f)));
   }
 
   /** run_state.json の実行ステータス（failed 表示・回復 UI 用） */

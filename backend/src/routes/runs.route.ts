@@ -284,6 +284,7 @@ router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
       executing: apsfRun.listExecuting().includes(req.params.id),
       phaseStatus: meta.phaseStatus,
       lastError: meta.lastError,
+      existingFiles: apsfRun.listArtifacts(req.params.id),
     });
   } catch (error) {
     res.status(500).json({

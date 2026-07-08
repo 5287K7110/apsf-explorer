@@ -7,6 +7,7 @@ import {
   apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision, ApsfExecutionMeta,
 } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
+import { ArtifactViewer } from './ArtifactViewer';
 // フェーズ定義は backend と共有（apsf-native/phases.ts が単一の正）
 import { isHumanPhase } from '../../backend/src/services/apsf-native/phases';
 
@@ -43,6 +44,7 @@ export const APSFRunPanel: React.FC = () => {
   const [nextRole, setNextRole] = useState<string>('');
   const [phaseStatus, setPhaseStatus] = useState<string>('');
   const [lastError, setLastError] = useState<string>('');
+  const [existingFiles, setExistingFiles] = useState<string[]>([]);
   const [phaseLoading, setPhaseLoading] = useState(false);
   const [command, setCommand] = useState<ApsfCommand>('plan');
   const [provider, setProvider] = useState<'claude' | 'codex'>('claude');
@@ -113,6 +115,7 @@ export const APSFRunPanel: React.FC = () => {
       setNextRole(res.nextRole || '');
       setPhaseStatus(res.phaseStatus || '');
       setLastError(res.lastError || '');
+      setExistingFiles(res.existingFiles || []);
       // IMPROVE 系フェーズでは Judge advisory を取得
       if (res.phase.startsWith('IMPROVE')) {
         try {
@@ -153,6 +156,8 @@ export const APSFRunPanel: React.FC = () => {
       setTranscriptLogs([]);
       setTranscriptError(null);
       setExecutionsError(null);
+      // 前の run の成果物タブを残さない（phase 取得完了までは空）
+      setExistingFiles([]);
       detectPhase(selected);
       loadExecutions(selected);
     }
@@ -555,6 +560,9 @@ export const APSFRunPanel: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* 成果物ビューア（リードオンリー Markdown） */}
+            <ArtifactViewer runId={selected} existingFiles={existingFiles} />
 
             {/* human フェーズエディタ */}
             {showEditor && (

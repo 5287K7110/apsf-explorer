@@ -31,6 +31,8 @@ export interface ApsfPhaseInfo {
   /** run_state.json の実行ステータス（クラッシュ回復で failed になる） */
   phaseStatus?: string;
   lastError?: string;
+  /** run に存在する既知の phase ファイル（成果物ビューア用） */
+  existingFiles?: string[];
 }
 
 export interface ApsfAdvisory {
