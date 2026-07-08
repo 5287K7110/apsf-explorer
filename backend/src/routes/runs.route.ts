@@ -35,6 +35,16 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
     }
 
     const effectiveMode = mode || process.env.EXECUTION_MODE || 'cli-full';
+
+    // 実行契約: 実 AI 実行は apsf-run に一本化されている。cli-full / cli-lite は
+    // デモ・テスト専用のレガシー経路（単一実行キューの対象外）であり、
+    // 本番ではリソース競合・イベント混線を防ぐため受け付けない
+    if (process.env.NODE_ENV === 'production' && effectiveMode !== 'apsf-run') {
+      res.status(400).json({
+        error: `Execution mode '${effectiveMode}' is demo/test-only. Use mode 'apsf-run' in production.`,
+      });
+      return;
+    }
     const executeRequest: ExecuteRequest = {
       runId,
       command,
@@ -88,6 +98,14 @@ router.post('/:id/cancel', (req: Request, res: Response) => {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }
+});
+
+/**
+ * GET /api/runs/queue
+ * 実行キューの状態（実行中の run + FIFO 待機列）
+ */
+router.get('/queue', (req: Request, res: Response) => {
+  res.json(apsfRun.getQueueState());
 });
 
 /**

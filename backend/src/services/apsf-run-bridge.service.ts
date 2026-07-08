@@ -54,11 +54,23 @@ export const PHASE_FILES = [
 ] as const;
 
 /**
- * 実行中 executor のレジストリ。
+ * 実行キュー（モジュールレベル共有）。
  * ExecutionModeRouter は getExecutor 毎に新しい APSFRunBridge を作るため、
- * 二重実行ガード・キャンセルはインスタンスを跨いで共有する必要がある。
+ * キュー・実行中状態・二重実行ガードはインスタンスを跨いで共有する必要がある。
+ *
+ * 設計判断: 同時実行は 1 件に制限し、以降の要求は FIFO で直列処理する
+ * （複数 run の並行実行はイベント混線・CLI リソース競合が未設計のため）。
+ * キューはメモリのみ — プロセス再起動で消えるのは意図的（再起動時は
+ * crash recovery が実行中だった run を failed 化するため、キュー残余の
+ * 復元よりも「ユーザーが再要求する」方が状態として誠実）。
  */
-const activeExecutors: Map<string, NativeApsfExecutor> = new Map();
+interface QueueEntry {
+  request: ExecuteRequest;
+  bridge: APSFRunBridge;
+}
+const executionQueue: QueueEntry[] = [];
+let runningEntry: { runId: string; executor: NativeApsfExecutor } | null = null;
+let drainActive = false;
 
 export class APSFRunBridge extends EventEmitter {
 
@@ -163,19 +175,93 @@ export class APSFRunBridge extends EventEmitter {
    * - request.context.dryRun = true でプロンプト組み立てのみ（AI 実行なし）
    */
   async execute(request: ExecuteRequest): Promise<void> {
-    let registered = false;
-    try {
-      if (!this.isAvailable()) {
-        throw new Error('APSF framework not available. Set APSF_ROOT to the framework repository.');
-      }
-      if (!RUN_NAME_RE.test(request.runId)) {
-        throw new Error(`Invalid run name: ${request.runId}`);
-      }
-      // 同一 run への二重実行を防止
-      if (activeExecutors.has(request.runId)) {
-        throw new Error(`Run ${request.runId} is already executing. Cancel it first or wait for completion.`);
-      }
+    // 検証と二重実行/二重キューのガード（同期プロローグ — enqueue 前に決着）
+    if (!this.isAvailable()) {
+      this.emitError(request.runId, 'APSF framework not available. Set APSF_ROOT to the framework repository.');
+      return;
+    }
+    if (!RUN_NAME_RE.test(request.runId)) {
+      this.emitError(request.runId, `Invalid run name: ${request.runId}`);
+      return;
+    }
+    if (
+      runningEntry?.runId === request.runId ||
+      executionQueue.some((e) => e.request.runId === request.runId)
+    ) {
+      this.emitError(
+        request.runId,
+        `Run ${request.runId} is already executing or queued. Cancel it first or wait for completion.`
+      );
+      return;
+    }
 
+    executionQueue.push({ request, bridge: this });
+    // 待たされる場合は順番を通知（実行中 + 自分より前の待機数）
+    if (runningEntry || executionQueue.length > 1) {
+      const position = executionQueue.length - 1 + (runningEntry ? 1 : 0);
+      this.emit('event', {
+        type: 'queued',
+        runId: request.runId,
+        timestamp: Date.now(),
+        data: {
+          mode: 'apsf-run',
+          position,
+          message: `[queue] waiting at position ${position} (running: ${runningEntry?.runId ?? '(draining)'})`,
+        },
+      } as StreamEvent);
+    }
+    this.broadcastQueueState(request.runId);
+    void APSFRunBridge.drain();
+  }
+
+  /**
+   * canonical なキュー状態イベント（enqueue / started / cancel / 完了で配信）。
+   * 個別の queued(position) 通知は dequeue やキャンセルで stale になるため、
+   * UI はこのイベントを正とする。
+   */
+  private broadcastQueueState(runId: string): void {
+    this.emit('event', {
+      type: 'queue',
+      runId,
+      timestamp: Date.now(),
+      data: { mode: 'apsf-run', ...this.getQueueState() },
+    } as StreamEvent);
+  }
+
+  /** FIFO drain — 常に 1 件だけ実行。1 件の失敗は次の実行を止めない */
+  private static async drain(): Promise<void> {
+    if (drainActive) return;
+    drainActive = true;
+    try {
+      while (executionQueue.length > 0) {
+        const { request, bridge } = executionQueue.shift()!;
+        const executor = new NativeApsfExecutor(bridge.apsfRoot);
+        runningEntry = { runId: request.runId, executor };
+        bridge.emit('event', {
+          type: 'started',
+          runId: request.runId,
+          timestamp: Date.now(),
+          data: { mode: 'apsf-run', command: request.command, message: '[queue] execution started' },
+        } as StreamEvent);
+        bridge.broadcastQueueState(request.runId);
+        try {
+          await bridge.runExecution(request, executor);
+        } catch (error) {
+          // runExecution は自前で error イベントを出す — ここは queue 継続の防波堤
+          console.error('[APSF-RUN] drain caught unexpected error:', error);
+        } finally {
+          runningEntry = null;
+          bridge.broadcastQueueState(request.runId);
+        }
+      }
+    } finally {
+      drainActive = false;
+    }
+  }
+
+  /** 1 件の実行本体（例外は error イベントに変換して外へ漏らさない） */
+  private async runExecution(request: ExecuteRequest, executor: NativeApsfExecutor): Promise<void> {
+    try {
       const provider = request.provider === 'codex' ? 'codex' : 'claude';
       const dryRun = Boolean(request.context && (request.context as any).dryRun);
       const isLoop = request.command === 'full-cycle';
@@ -184,9 +270,6 @@ export class APSFRunBridge extends EventEmitter {
         `[APSF-RUN] native ${isLoop ? 'auto-loop' : 'single-phase'} ${request.runId}${dryRun ? ' (DryRun)' : ''}`
       );
 
-      const executor = new NativeApsfExecutor(this.apsfRoot);
-      activeExecutors.set(request.runId, executor);
-      registered = true;
       executor.on('event', (event: StreamEvent) => this.emit('event', event));
 
       const opts = { runId: request.runId, provider, dryRun } as const;
@@ -201,7 +284,6 @@ export class APSFRunBridge extends EventEmitter {
         phase = await executor.executePhase(opts);
       }
 
-      activeExecutors.delete(request.runId);
       this.emit('event', {
         type: 'complete',
         runId: request.runId,
@@ -209,28 +291,47 @@ export class APSFRunBridge extends EventEmitter {
         data: { mode: 'apsf-run', engine: 'native', exitCode: 0, phase, ...detail },
       } as StreamEvent);
     } catch (error) {
-      // 二重実行拒否のエラーで先行実行のレジストリを消さないこと
-      if (registered) activeExecutors.delete(request.runId);
-      this.emit('event', {
-        type: 'error',
-        runId: request.runId,
-        timestamp: Date.now(),
-        data: {
-          error: error instanceof Error ? error.message : 'Unknown error',
-        },
-      } as StreamEvent);
+      this.emitError(request.runId, error instanceof Error ? error.message : 'Unknown error');
     }
   }
 
-  /** 実行中の処理をキャンセル */
-  cancelExecution(runId: string): void {
-    activeExecutors.get(runId)?.cancel();
-    activeExecutors.delete(runId);
+  private emitError(runId: string, message: string): void {
+    this.emit('event', {
+      type: 'error',
+      runId,
+      timestamp: Date.now(),
+      data: { error: message },
+    } as StreamEvent);
   }
 
-  /** 実行中の run 一覧 */
+  /** 実行中の処理をキャンセル（待機列からの除去も含む） */
+  cancelExecution(runId: string): void {
+    if (runningEntry?.runId === runId) {
+      runningEntry.executor.cancel();
+      return;
+    }
+    const idx = executionQueue.findIndex((e) => e.request.runId === runId);
+    if (idx >= 0) {
+      const [entry] = executionQueue.splice(idx, 1);
+      entry.bridge.emitError(runId, 'Cancelled while queued.');
+      entry.bridge.broadcastQueueState(runId);
+    }
+  }
+
+  /** 実行中 + 待機中の run 一覧（二重実行ガード・UI の executing 表示用） */
   listExecuting(): string[] {
-    return [...activeExecutors.keys()];
+    return [
+      ...(runningEntry ? [runningEntry.runId] : []),
+      ...executionQueue.map((e) => e.request.runId),
+    ];
+  }
+
+  /** キュー状態（GET /api/runs/queue） */
+  getQueueState(): { running: string | null; queued: string[] } {
+    return {
+      running: runningEntry?.runId ?? null,
+      queued: executionQueue.map((e) => e.request.runId),
+    };
   }
 
   // ── Run 作成・phase ファイル・advisory ─────────────────────────
@@ -301,8 +402,8 @@ export class APSFRunBridge extends EventEmitter {
     const runDir = resolveRunDir(this.apsfRoot, runName);
     if (!runDir) throw new Error(`Run not found: ${runName}`);
     // 実行中の run への裁定は状態競合を招くため拒否（実行中ガード再利用）
-    if (activeExecutors.has(runName)) {
-      throw new Error(`Run ${runName} is currently executing. Wait for completion or cancel first.`);
+    if (this.listExecuting().includes(runName)) {
+      throw new Error(`Run ${runName} is currently executing or queued. Wait for completion or cancel first.`);
     }
     return applyJudgeDecision(runDir, decision, reason);
   }

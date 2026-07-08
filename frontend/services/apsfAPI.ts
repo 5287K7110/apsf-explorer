@@ -127,6 +127,19 @@ export const apsfAPI = {
     );
   },
 
+  /** 実行キャンセル（実行中の停止 / 待機列からの除去） */
+  cancel(runId: string) {
+    return apiClient.post<{ runId: string; status: string }>(
+      `/runs/${encodeURIComponent(runId)}/cancel`,
+      {}
+    );
+  },
+
+  /** 実行キューの状態（実行中 + FIFO 待機列） */
+  getQueue() {
+    return apiClient.get<{ running: string | null; queued: string[] }>('/runs/queue');
+  },
+
   /** judge_advisory.json の取得 */
   getAdvisory(runId: string) {
     return apiClient.get<{ runId: string; advisory: ApsfAdvisory | null }>(

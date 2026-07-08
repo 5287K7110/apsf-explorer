@@ -49,7 +49,8 @@ export const APSFRunPanel: React.FC = () => {
   const [command, setCommand] = useState<ApsfCommand>('plan');
   const [provider, setProvider] = useState<'claude' | 'codex'>('claude');
   const [dryRun, setDryRun] = useState(true);
-  const [executing, setExecuting] = useState(false);
+  // 実行要求の送信直後だけ true（queue イベント到着までの瞬間の二重送信防止）
+  const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   // run 作成フォーム
@@ -67,6 +68,11 @@ export const APSFRunPanel: React.FC = () => {
   // Judge 裁定（IMPROVE_NEEDED）
   const [judgeReason, setJudgeReason] = useState('');
   const [judging, setJudging] = useState(false);
+  // 実行キュー（グローバル状態: 実行中 + FIFO 待機列）
+  const [queueState, setQueueState] = useState<{ running: string | null; queued: string[] }>({
+    running: null,
+    queued: [],
+  });
   // 過去実行トランスクリプト（'' = ライブ表示）
   const [executions, setExecutions] = useState<ApsfExecutionMeta[]>([]);
   const [executionsLoading, setExecutionsLoading] = useState(false);
@@ -101,6 +107,18 @@ export const APSFRunPanel: React.FC = () => {
   useEffect(() => {
     loadRuns();
   }, [loadRuns]);
+
+  // キュー状態: マウント時に取得 + canonical queue イベントでライブ更新
+  useEffect(() => {
+    apsfAPI.getQueue().then(setQueueState).catch(() => { /* 表示は best-effort */ });
+    const onQueue = (msg: any) => {
+      if (msg.data && 'queued' in msg.data) {
+        setQueueState({ running: msg.data.running ?? null, queued: msg.data.queued ?? [] });
+      }
+    };
+    wsClient.on('queue', onQueue);
+    return () => wsClient.off('queue', onQueue);
+  }, []);
 
   // 実フェーズ検出（+ advisory）
   const detectPhase = useCallback(async (runId: string) => {
@@ -199,7 +217,6 @@ export const APSFRunPanel: React.FC = () => {
             : String(data.data?.message ?? '').trimEnd();
       if (text) appendLog(kind, text);
       if (kind === 'complete' || kind === 'error') {
-        setExecuting(false);
         // error でも再検出する: 実行失敗は phase_status=failed として
         // durable に記録されるため、failed バナーを即時反映する
         detectPhase(selectedRef.current);
@@ -212,15 +229,22 @@ export const APSFRunPanel: React.FC = () => {
     const onComplete = onEvent('complete');
     const onError = onEvent('error');
     const onLog = onEvent('log');
+    // キューイベント: 順番待ち・実行開始をログに表示（executing は維持）
+    const onQueued = onEvent('info');
+    const onStarted = onEvent('info');
     wsClient.on('progress', onProgress);
     wsClient.on('complete', onComplete);
     wsClient.on('error', onError);
     wsClient.on('log', onLog);
+    wsClient.on('queued', onQueued);
+    wsClient.on('started', onStarted);
     return () => {
       wsClient.off('progress', onProgress);
       wsClient.off('complete', onComplete);
       wsClient.off('error', onError);
       wsClient.off('log', onLog);
+      wsClient.off('queued', onQueued);
+      wsClient.off('started', onStarted);
     };
   }, [appendLog, detectPhase, loadExecutions]);
 
@@ -229,15 +253,34 @@ export const APSFRunPanel: React.FC = () => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
+  // 選択中 run の実行状態はグローバル boolean ではなく queueState から導出する
+  // （run 切替や別 run の完了で UI が実行不能のまま残らない。
+  //  実行中に別 run を選べば、その run はキューに投入できる）
+  const selectedActive =
+    queueState.running === selected || queueState.queued.includes(selected);
+
   const handleExecute = async () => {
-    if (!selected || executing) return;
-    setExecuting(true);
-    appendLog('info', `実行開始: ${command} (provider=${provider}${dryRun ? ', DryRun' : ''})`);
+    if (!selected || selectedActive || submitting) return;
+    setSubmitting(true);
+    appendLog('info', `実行要求: ${command} (provider=${provider}${dryRun ? ', DryRun' : ''})`);
     try {
       await apsfAPI.execute(selected, command, provider, dryRun);
     } catch (e) {
       appendLog('error', e instanceof Error ? e.message : 'execute request failed');
-      setExecuting(false);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // キュー item のキャンセル（実行中 run・待機 run のどちらにも使える）
+  const handleCancelQueued = async (runId: string) => {
+    try {
+      await apsfAPI.cancel(runId);
+      // canonical queue イベントが状態を更新するが、即時反映のため再取得も行う
+      const qs = await apsfAPI.getQueue();
+      setQueueState(qs);
+    } catch (e) {
+      appendLog('error', e instanceof Error ? e.message : 'cancel failed');
     }
   };
 
@@ -641,12 +684,16 @@ export const APSFRunPanel: React.FC = () => {
                 </label>
                 <button
                   onClick={handleExecute}
-                  disabled={executing}
+                  disabled={selectedActive || submitting}
                   data-testid="apsf-execute"
                   className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition"
                 >
-                  {executing ? <Loader2 className="animate-spin" size={14} /> : <Play size={14} />}
-                  {executing ? 'Executing...' : 'Execute'}
+                  {selectedActive || submitting ? <Loader2 className="animate-spin" size={14} /> : <Play size={14} />}
+                  {queueState.running === selected
+                    ? 'Executing...'
+                    : queueState.queued.includes(selected)
+                      ? `Queued (#${queueState.queued.indexOf(selected) + 1})`
+                      : 'Execute'}
                 </button>
               </div>
               {!dryRun && (
@@ -655,6 +702,37 @@ export const APSFRunPanel: React.FC = () => {
                 </p>
               )}
             </div>
+
+            {/* 実行キュー（同時実行は 1 件 — 残りは FIFO 待機） */}
+            {(queueState.running || queueState.queued.length > 0) && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs" data-testid="apsf-queue">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-slate-300">Queue:</span>
+                  {queueState.running && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-200 border border-blue-700 font-mono" data-testid="apsf-queue-running">
+                      ▶ {queueState.running}
+                    </span>
+                  )}
+                  {queueState.queued.map((r, i) => (
+                    <span
+                      key={r}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono"
+                      data-testid={`apsf-queue-item-${r}`}
+                    >
+                      {i + 1}. {r}
+                      <button
+                        onClick={() => handleCancelQueued(r)}
+                        data-testid={`apsf-queue-cancel-${r}`}
+                        className="ml-1 p-0.5 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400"
+                        title="キューから除去"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* ログペイン（ライブ / 過去実行トランスクリプト） */}
             <div className="bg-slate-950 border border-slate-800 rounded-xl" data-testid="apsf-log-pane">

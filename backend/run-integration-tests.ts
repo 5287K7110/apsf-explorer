@@ -75,6 +75,9 @@ function startBackend(): Promise<void> {
         RUNS_DIR: resolve(__dirname, 'runs'),
         // 実 APSF Framework（存在する環境でのみ apsf-run テストが実行される）
         APSF_ROOT: process.env.APSF_ROOT || APSF_ROOT_DEFAULT,
+        // apsf-run の非 DryRun 実行はテストでは fake provider（1s sleep）を使う
+        // （実 AI を起動しない。キュー直列化テストで重なりを作るのに必要）
+        APSF_NATIVE_CLI_OVERRIDE: `python "${resolve(FIXTURE_DIR, 'slow_native_cli.py')}" 1`,
       },
     });
     backend.stdout?.on('data', (d) => process.env.DEBUG_BACKEND && console.log(`[backend] ${d}`));
@@ -580,9 +583,9 @@ async function main(): Promise<void> {
         '## Done Criteria\n\n- [x] ガードが機能する\n');
 
       try {
-        // 実行登録は execute の同期プロローグで行われるため、await せずに
-        // 2 連続で呼べば 2 回目は決定的に拒否される
-        // （ネイティブ化で DryRun が数 ms になったため sleep 方式は不可）
+        // enqueue は execute の同期プロローグで行われるため、await せずに
+        // 2 連続で呼べば 2 回目は決定的に拒否される（キュー化後の execute は
+        // enqueue 時点で resolve する — 完了はイベントで待つ）
         const first = bridge.execute({
           runId: tmpRun, command: 'build', provider: 'claude', roles: [], mode: 'apsf-run',
           context: { dryRun: true },
@@ -597,9 +600,13 @@ async function main(): Promise<void> {
           (e) => e.type === 'error' && String(e.data?.error).includes('already executing')
         );
         assert(rejection, `no double-execution rejection. events: ${events.map((e) => e.type).join(',')}`);
-        // 1 回目は正常完了していること
+        // 1 回目は正常完了していること（drain 完了をポーリングで待つ）
+        const deadline = Date.now() + 5000;
+        while (!events.some((e) => e.type === 'complete') && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
         const completed = events.find((e) => e.type === 'complete');
-        assert(completed, 'first execution did not complete');
+        assert(completed, `first execution did not complete. events: ${events.map((e) => e.type).join(',')}`);
       } finally {
         rmRun(tmpDir, { recursive: true, force: true });
       }
@@ -1113,6 +1120,289 @@ async function main(): Promise<void> {
       });
     } finally {
       rmTranscriptRun();
+    }
+
+    // ---- 実行キュー（単一実行 + FIFO、直列化・キャンセル） ----
+
+    const queueRuns = [
+      '2026-07-05-981', '2026-07-05-982', '2026-07-05-983', '2026-07-05-984',
+      '2026-07-05-985', '2026-07-05-986', '2026-07-05-987',
+    ].map((d, i) => `${d}_work_explorer-queue-test-${i + 1}`);
+    const rmQueueRuns = () => {
+      for (const name of queueRuns) {
+        rmJudgeRun(resolve(apsfRoot, 'runs/work', name), { recursive: true, force: true });
+      }
+    };
+    rmQueueRuns();
+
+    try {
+      /** 認証付き WS で複数 run のイベントを収集する */
+      function collectEvents(runIds: string[], doneWhen: (events: any[]) => boolean, timeoutMs = 30000): {
+        events: any[]; done: Promise<void>; open: Promise<void>;
+      } {
+        const events: any[] = [];
+        const ws = new WebSocket(wsAuthUrl());
+        // 実行開始（started）を取り漏らさないよう、POST 前に open を待てるようにする
+        const open = new Promise<void>((res, reject) => {
+          ws.on('open', () => res());
+          ws.on('error', reject);
+        });
+        const done = new Promise<void>((res, reject) => {
+          const t = setTimeout(() => {
+            ws.close();
+            reject(new Error(`event collection timeout. got: ${events.map((e) => `${e.type}:${e.runId}`).join(',')}`));
+          }, timeoutMs);
+          ws.on('message', (raw) => {
+            try {
+              const msg = JSON.parse(raw.toString());
+              if (runIds.includes(msg.runId)) events.push(msg);
+              if (doneWhen(events)) { clearTimeout(t); ws.close(); res(); }
+            } catch { /* ignore */ }
+          });
+          ws.on('error', (e) => { clearTimeout(t); reject(e); });
+        });
+        return { events, done, open };
+      }
+
+      const postExecute = (runId: string) =>
+        fetch(`${BASE}/api/runs/${runId}/execute`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ command: 'build', provider: 'claude', roles: [], mode: 'apsf-run' }),
+        });
+
+      await test('Queue: 並行要求 3 件が要求順に直列実行される', async () => {
+        const [q1, q2, q3] = queueRuns;
+        for (const r of [q1, q2, q3]) await createLightRun(r, true); // BUILD_NEEDED
+
+        const finished = (evts: any[]) =>
+          [q1, q2, q3].every((r) =>
+            evts.some((e) => (e.type === 'complete' || e.type === 'error') && e.runId === r)
+          );
+        const { events, done, open } = collectEvents([q1, q2, q3], finished);
+        await open;
+
+        // fake provider は 1 実行 1 秒 — 3 件を連続要求して重なりを作る
+        for (const r of [q1, q2, q3]) {
+          const res = await postExecute(r);
+          assert(res.status === 200, `execute ${r} failed: ${await res.text()}`);
+        }
+
+        // 直後のキュー状態: 1 件実行中 + 残りが FIFO 待機
+        const qs = await fetch(`${BASE}/api/runs/queue`, { headers: authHeader() }).then((r) => r.json());
+        assert(qs.running !== null, `nothing running: ${JSON.stringify(qs)}`);
+        assert(qs.running === q1, `running: ${qs.running}`);
+        assert(qs.queued.join(',') === [q2, q3].join(','), `queued: ${qs.queued}`);
+
+        await done;
+
+        // started が要求順であること（直列実行の実証）
+        const startedOrder = events.filter((e) => e.type === 'started').map((e) => e.runId);
+        assert(startedOrder.join(',') === [q1, q2, q3].join(','), `started order: ${startedOrder}`);
+        // 待機した 2 件に queued（position 付き）が通知されること
+        const queuedEvents = events.filter((e) => e.type === 'queued');
+        assert(queuedEvents.some((e) => e.runId === q2 && e.data.position === 1), 'q2 queued(1) missing');
+        assert(queuedEvents.some((e) => e.runId === q3 && e.data.position === 2), 'q3 queued(2) missing');
+        // 「started は常に直前の complete/error の後」= 同時実行が 1 件であること
+        let active = 0;
+        let maxActive = 0;
+        for (const e of events) {
+          if (e.type === 'started') { active++; maxActive = Math.max(maxActive, active); }
+          if (e.type === 'complete' || e.type === 'error') active--;
+        }
+        assert(maxActive === 1, `max concurrent executions: ${maxActive}`);
+        // 全件がキューを通って完走し、backend も無事
+        const health = await fetch(`${BASE}/health`);
+        assert(health.ok, 'backend unhealthy after queue drain');
+      });
+
+      await test('Queue: 待機中の run をキャンセルすると列から除去される', async () => {
+        const [, , , q4, q5] = queueRuns;
+        await createLightRun(q4, true);
+        await createLightRun(q5, true);
+
+        const gotCancelled = (evts: any[]) =>
+          evts.some((e) => e.type === 'error' && e.runId === q5 && String(e.data.error).includes('Cancelled while queued'));
+        const q4Done = (evts: any[]) =>
+          evts.some((e) => (e.type === 'complete' || e.type === 'error') && e.runId === q4);
+        const { events, done, open } = collectEvents([q4, q5], (evts) => gotCancelled(evts) && q4Done(evts));
+        await open;
+
+        await postExecute(q4); // running（1s）
+        await postExecute(q5); // queued
+        let qs = await fetch(`${BASE}/api/runs/queue`, { headers: authHeader() }).then((r) => r.json());
+        assert(qs.queued.includes(q5), `q5 not queued: ${JSON.stringify(qs)}`);
+
+        const cancel = await fetch(`${BASE}/api/runs/${q5}/cancel`, { method: 'POST', headers: authHeader() });
+        assert(cancel.status === 200, `cancel failed: ${cancel.status}`);
+        qs = await fetch(`${BASE}/api/runs/queue`, { headers: authHeader() }).then((r) => r.json());
+        assert(!qs.queued.includes(q5), `q5 still queued after cancel: ${JSON.stringify(qs)}`);
+
+        await done;
+        // q5 は started されないこと（キャンセルが効いた証拠）
+        assert(!events.some((e) => e.type === 'started' && e.runId === q5), 'cancelled run was started');
+        // canonical queue イベントがキャンセル後の正しい状態（q5 不在）を配信していること
+        const queueEvents = events.filter((e) => e.type === 'queue');
+        assert(queueEvents.length > 0, 'no canonical queue events');
+        const afterCancel = queueEvents.find((e) => e.runId === q5 && !e.data.queued.includes(q5));
+        assert(afterCancel, 'queue event after cancel does not reflect removal');
+      });
+
+      await test('Queue: WS 経由の cancel でも待機列から除去される', async () => {
+        const [, , , , , q6, q7] = queueRuns;
+        await createLightRun(q6, true);
+        await createLightRun(q7, true);
+
+        const q6Done = (evts: any[]) =>
+          evts.some((e) => (e.type === 'complete' || e.type === 'error') && e.runId === q6);
+        const q7Cancelled = (evts: any[]) =>
+          evts.some((e) => e.type === 'error' && e.runId === q7 && String(e.data.error).includes('Cancelled while queued'));
+        const { events, done, open } = collectEvents([q6, q7], (evts) => q6Done(evts) && q7Cancelled(evts));
+        await open;
+
+        await postExecute(q6); // running（1s）
+        await postExecute(q7); // queued
+
+        // WS メッセージでキャンセル（execution-handler 経由 — enqueue 即 return の
+        // 非同期キューでも共有キューに届くことの検証）
+        await new Promise<void>((res, reject) => {
+          const ws = new WebSocket(wsAuthUrl());
+          const t = setTimeout(() => { ws.close(); reject(new Error('ws cancel send timeout')); }, 5000);
+          ws.on('open', () => {
+            ws.send(JSON.stringify({ type: 'cancel', runId: q7 }));
+            setTimeout(() => { clearTimeout(t); ws.close(); res(); }, 300);
+          });
+          ws.on('error', reject);
+        });
+
+        const qs = await fetch(`${BASE}/api/runs/queue`, { headers: authHeader() }).then((r) => r.json());
+        assert(!qs.queued.includes(q7), `q7 still queued after WS cancel: ${JSON.stringify(qs)}`);
+        await done;
+        assert(!events.some((e) => e.type === 'started' && e.runId === q7), 'WS-cancelled run was started');
+      });
+
+      await test('Queue: WS execute 3 件も要求順に直列実行される', async () => {
+        const wsRuns = ['2026-07-05-978', '2026-07-05-979', '2026-07-05-980']
+          .map((d, i) => `${d}_work_explorer-queue-ws-${i + 1}`);
+        for (const r of wsRuns) {
+          rmJudgeRun(resolve(apsfRoot, 'runs/work', r), { recursive: true, force: true });
+          await createLightRun(r, true);
+        }
+        try {
+          const finished = (evts: any[]) =>
+            wsRuns.every((r) =>
+              evts.some((e) => (e.type === 'complete' || e.type === 'error') && e.runId === r)
+            );
+          const { events, done, open } = collectEvents(wsRuns, finished);
+          await open;
+
+          // 1 本の WS から 3 件の execute メッセージを連続送信
+          await new Promise<void>((res, reject) => {
+            const ws = new WebSocket(wsAuthUrl());
+            const t = setTimeout(() => { ws.close(); reject(new Error('ws execute send timeout')); }, 5000);
+            ws.on('open', () => {
+              for (const r of wsRuns) {
+                ws.send(JSON.stringify({
+                  type: 'execute',
+                  payload: { runId: r, provider: 'claude', command: 'build', roles: [], mode: 'apsf-run' },
+                }));
+              }
+              setTimeout(() => { clearTimeout(t); ws.close(); res(); }, 300);
+            });
+            ws.on('error', reject);
+          });
+
+          await done;
+
+          const startedOrder = events.filter((e) => e.type === 'started').map((e) => e.runId);
+          assert(startedOrder.join(',') === wsRuns.join(','), `WS started order: ${startedOrder}`);
+          const queuedEvents = events.filter((e) => e.type === 'queued');
+          assert(queuedEvents.some((e) => e.runId === wsRuns[1] && e.data.position === 1), 'ws#2 queued(1) missing');
+          assert(queuedEvents.some((e) => e.runId === wsRuns[2] && e.data.position === 2), 'ws#3 queued(2) missing');
+          let active = 0;
+          let maxActive = 0;
+          for (const e of events) {
+            if (e.type === 'started') { active++; maxActive = Math.max(maxActive, active); }
+            if (e.type === 'complete' || e.type === 'error') active--;
+          }
+          assert(maxActive === 1, `WS max concurrent executions: ${maxActive}`);
+        } finally {
+          for (const r of wsRuns) {
+            rmJudgeRun(resolve(apsfRoot, 'runs/work', r), { recursive: true, force: true });
+          }
+        }
+      });
+
+      await test('Queue: production では非 apsf-run モードの execute を拒否（契約の実施行）', async () => {
+        const PROD_PORT = PORT + 60;
+        const child = spawn('npx tsx src/index.ts', {
+          cwd: __dirname,
+          shell: true,
+          env: {
+            ...process.env,
+            PORT: String(PROD_PORT),
+            NODE_ENV: 'production',
+            JWT_SECRET,
+            APSF_ROOT: apsfRoot,
+          },
+        });
+        try {
+          const deadline = Date.now() + 15000;
+          for (;;) {
+            try {
+              const r = await fetch(`http://localhost:${PROD_PORT}/health`);
+              if (r.ok) break;
+            } catch { /* not up */ }
+            assert(Date.now() < deadline, 'production backend did not start');
+            await new Promise((r2) => setTimeout(r2, 300));
+          }
+          // legacy モードは 400
+          const legacy = await fetch(`http://localhost:${PROD_PORT}/api/runs/prod-test-1/execute`, {
+            method: 'POST',
+            headers: authHeader(),
+            body: JSON.stringify({ command: 'plan', provider: 'claude', roles: [], mode: 'cli-full' }),
+          });
+          assert(legacy.status === 400, `expected 400 for cli-full, got ${legacy.status}`);
+          const body = await legacy.json();
+          assert(String(body.error).includes('apsf-run'), `error message: ${body.error}`);
+          // apsf-run は受理される（run 不在のエラーは WS 側 — REST は 200 executing）
+          const ok = await fetch(`http://localhost:${PROD_PORT}/api/runs/2026-07-05-999_work_no-such-run/execute`, {
+            method: 'POST',
+            headers: authHeader(),
+            body: JSON.stringify({ command: 'build', provider: 'claude', roles: [], mode: 'apsf-run' }),
+          });
+          assert(ok.status === 200, `expected 200 for apsf-run, got ${ok.status}`);
+
+          // WS execute も同じ契約で拒否される（REST 迂回の防止）
+          const prodWsToken = jwt.sign({ userId: 'test-user' }, JWT_SECRET);
+          const wsError = await new Promise<string>((res, reject) => {
+            const ws = new WebSocket(`ws://localhost:${PROD_PORT}/?token=${encodeURIComponent(prodWsToken)}`);
+            const t = setTimeout(() => { ws.close(); reject(new Error('no WS rejection within 5s')); }, 5000);
+            ws.on('open', () => ws.send(JSON.stringify({
+              type: 'execute',
+              payload: { runId: 'prod-ws-1', provider: 'claude', command: 'plan', roles: [], mode: 'cli-full' },
+            })));
+            ws.on('message', (raw) => {
+              try {
+                const msg = JSON.parse(raw.toString());
+                if (msg.type === 'error' && msg.runId === 'prod-ws-1') {
+                  clearTimeout(t); ws.close(); res(String(msg.data?.error ?? ''));
+                }
+              } catch { /* ignore */ }
+            });
+            ws.on('error', reject);
+          });
+          assert(wsError.includes('demo/test-only'), `WS rejection message: ${wsError}`);
+        } finally {
+          if (process.platform === 'win32' && child.pid) {
+            try { execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'pipe' }); } catch { /* dead */ }
+          } else {
+            child.kill('SIGTERM');
+          }
+        }
+      });
+    } finally {
+      rmQueueRuns();
     }
   } else {
     console.log(`⏭️  SKIP  APSF framework tests (not found at ${apsfRoot})`);

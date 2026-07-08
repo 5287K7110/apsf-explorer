@@ -10,4 +10,13 @@ import time
 sys.stdin.read()  # プロンプトを消費（executor は stdin でプロンプトを渡す）
 print("[fake] long-running execution started", flush=True)
 time.sleep(int(sys.argv[1]) if len(sys.argv) > 1 else 120)
-print("[fake] finished (should not be reached in kill tests)", flush=True)
+# sleep 後は write-phase の meaningful-content 検証（>3 行）を通る出力を返す
+# （kill テストではここに到達しない。queue テストでは build.md として保存される）
+print("# Build", flush=True)
+print("", flush=True)
+print("## Work Done", flush=True)
+print("", flush=True)
+print("- fake provider execution finished.", flush=True)
+print("- output is meaningful enough to persist.", flush=True)
+print("- used by queue serialization tests.", flush=True)
+print("- see slow_native_cli.py.", flush=True)

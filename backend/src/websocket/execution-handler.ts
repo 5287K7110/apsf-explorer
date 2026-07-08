@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
+import { APSFRunBridge } from '../services/apsf-run-bridge.service.js';
 import { executionEvents } from '../services/event-bus.js';
 import { ExecuteRequest, StreamEvent } from '../types/index.js';
 import { ExecutionMode } from '../types/execution-mode.js';
@@ -75,6 +76,23 @@ export class ExecutionHandler {
         })
       );
 
+      // 実行契約（REST と同一）: 本番では実 AI 実行 = apsf-run のみ。
+      // cli-full / cli-lite はデモ・テスト専用のレガシー経路
+      const effectiveMode = request.mode || process.env.EXECUTION_MODE || 'cli-full';
+      if (process.env.NODE_ENV === 'production' && effectiveMode !== 'apsf-run') {
+        socket.send(
+          JSON.stringify({
+            type: 'error',
+            runId: request.runId,
+            timestamp: Date.now(),
+            data: {
+              error: `Execution mode '${effectiveMode}' is demo/test-only. Use mode 'apsf-run' in production.`,
+            },
+          })
+        );
+        return;
+      }
+
       // Execution Mode Router 経由（mode 未指定はデフォルトモード）
       const executor = this.modeRouter.getExecutor(request);
       this.activeExecutors.set(request.runId, executor as any);
@@ -99,8 +117,13 @@ export class ExecutionHandler {
 
   /**
    * キャンセルリクエストを処理
+   *
+   * apsf-run はキュー化されており execute() は enqueue で即 return する。
+   * handler の activeExecutors には残らないため、常に bridge の共有キュー
+   * （実行中の cancel + 待機列からの除去）にも委譲する
    */
   private handleCancel(runId: string): void {
+    new APSFRunBridge().cancelExecution(runId);
     const executor = this.activeExecutors.get(runId);
     executor?.cancelExecution?.(runId);
     (executor as any)?.cancel?.();

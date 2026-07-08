@@ -30,7 +30,7 @@ export interface ExecuteResponse {
 }
 
 export interface StreamEvent {
-  type: 'start' | 'progress' | 'log' | 'error' | 'complete';
+  type: 'start' | 'progress' | 'log' | 'error' | 'complete' | 'queued' | 'started' | 'queue';
   runId: string;
   timestamp: number;
   data: Record<string, unknown>;
