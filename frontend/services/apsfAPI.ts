@@ -42,6 +42,18 @@ export interface ApsfAdvisory {
   [key: string]: unknown;
 }
 
+export interface ApsfExecutionMeta {
+  file: string;
+  startedAt: string;
+  sizeBytes: number;
+}
+
+export interface ApsfTranscriptEvent {
+  ts: number;
+  type: string;
+  data?: Record<string, unknown>;
+}
+
 export type ApsfJudgeDecision = 'Accept' | 'Return to Build' | 'Return to Plan';
 
 export interface ApsfJudgeResult {
@@ -96,6 +108,20 @@ export const apsfAPI = {
     return apiClient.post<ApsfJudgeResult>(
       `/runs/apsf/${encodeURIComponent(runId)}/judge`,
       { decision, reason }
+    );
+  },
+
+  /** 過去の実行トランスクリプト一覧 */
+  getExecutions(runId: string) {
+    return apiClient.get<{ runId: string; executions: ApsfExecutionMeta[] }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/executions`
+    );
+  },
+
+  /** 実行トランスクリプトの中身 */
+  getExecutionTranscript(runId: string, file: string) {
+    return apiClient.get<{ runId: string; file: string; events: ApsfTranscriptEvent[] }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/executions/${encodeURIComponent(file)}`
     );
   },
 

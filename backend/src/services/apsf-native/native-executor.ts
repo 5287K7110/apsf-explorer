@@ -21,6 +21,7 @@ import { isHumanPhase, AUTO_OWNED_PHASES, ApsfPhase } from './phases.js';
 import { buildPhasePrompt } from './prompt-builder.js';
 import { writePhase, nextPhaseAfterWrite } from './write-phase.js';
 import { transition, atomicWrite, setPhaseStatus } from './run-state.js';
+import { TranscriptWriter } from './execution-transcript.js';
 import { resolveFrameworkRoot } from './content-root.js';
 import { StreamEvent } from '../../types/index.js';
 
@@ -45,6 +46,8 @@ export class NativeApsfExecutor extends EventEmitter {
   private cancelled = false;
   /** 実行マーカーを保持中の runId（loop → phase のネストで二重管理しない） */
   private markerHeldFor: string | null = null;
+  /** 実行中のトランスクリプト書き込み器（loop → phase のネストで共有） */
+  private transcript: TranscriptWriter | null = null;
 
   constructor(private apsfRoot: string) {
     super();
@@ -52,6 +55,32 @@ export class NativeApsfExecutor extends EventEmitter {
 
   cancel(): void {
     this.cancelled = true;
+  }
+
+  /**
+   * 1 実行 = 1 トランスクリプト（runs/<run>/executions/<ts>.jsonl）。
+   * ネスト（executeLoop → executePhase）では外側が所有する。
+   * 記録失敗は実行を止めない（TranscriptWriter 側で握る）。
+   */
+  private async withTranscript<T>(
+    runId: string,
+    meta: Record<string, unknown>,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    if (this.transcript) return fn(); // 外側（loop）が所有
+    const runDir = resolveRunDir(this.apsfRoot, runId);
+    if (!runDir) return fn(); // run 不在エラーは fn 側で投げる
+    this.transcript = new TranscriptWriter(runDir, { runId, ...meta });
+    try {
+      const result = await fn();
+      this.transcript.append('complete', { result: result as unknown as Record<string, unknown> });
+      return result;
+    } catch (e) {
+      this.transcript.append('error', { error: e instanceof Error ? e.message : String(e) });
+      throw e;
+    } finally {
+      this.transcript = null;
+    }
   }
 
   // ── 実行マーカー（クラッシュ回復） ────────────────────────────
@@ -129,6 +158,8 @@ export class NativeApsfExecutor extends EventEmitter {
   }
 
   private progress(runId: string, message: string, extra: Record<string, unknown> = {}): void {
+    // ライブ配信（WS）と同時にトランスクリプトへ永続化（best-effort）
+    this.transcript?.append('progress', { message, ...extra });
     this.emit('event', {
       type: 'progress',
       runId,
@@ -288,6 +319,14 @@ export class NativeApsfExecutor extends EventEmitter {
    * @returns 実行後のフェーズ
    */
   async executePhase(opts: NativeExecuteOptions): Promise<string> {
+    return this.withTranscript(
+      opts.runId,
+      { command: 'phase', provider: opts.provider, dryRun: Boolean(opts.dryRun) },
+      () => this.executePhaseCore(opts)
+    );
+  }
+
+  private async executePhaseCore(opts: NativeExecuteOptions): Promise<string> {
     const { runId, provider, dryRun, timeoutMs = 15 * 60 * 1000 } = opts;
     const info = this.detectPhase(runId);
 
@@ -371,10 +410,16 @@ export class NativeApsfExecutor extends EventEmitter {
    * （apsf-auto-loop.ps1 の TS ネイティブ置き換え）
    */
   async executeLoop(opts: NativeExecuteOptions): Promise<{ phase: string; cycles: number; stopReason: string }> {
-    if (opts.dryRun) return this.loopCore(opts);
-    // ループ全体を 1 つの実行マーカーで包む（サイクル間のクラッシュも回復対象）
-    const initial = this.detectPhase(opts.runId);
-    return this.withMarker(opts.runId, initial.phase, () => this.loopCore(opts));
+    return this.withTranscript(
+      opts.runId,
+      { command: 'full-cycle', provider: opts.provider, dryRun: Boolean(opts.dryRun) },
+      () => {
+        if (opts.dryRun) return this.loopCore(opts);
+        // ループ全体を 1 つの実行マーカーで包む（サイクル間のクラッシュも回復対象）
+        const initial = this.detectPhase(opts.runId);
+        return this.withMarker(opts.runId, initial.phase, () => this.loopCore(opts));
+      }
+    );
   }
 
   private async loopCore(opts: NativeExecuteOptions): Promise<{ phase: string; cycles: number; stopReason: string }> {

@@ -204,6 +204,47 @@ router.post('/apsf/:id/judge', (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/runs/apsf/:id/executions
+ * 過去の実行トランスクリプト一覧（runs/<run>/executions/*.jsonl、新しい順）
+ */
+router.get('/apsf/:id/executions', (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    res.json({ runId: req.params.id, executions: apsfRun.listExecutions(req.params.id) });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/runs/apsf/:id/executions/:file
+ * 実行トランスクリプトの中身（JSONL をパース済みイベント配列で返す）
+ */
+router.get('/apsf/:id/executions/:file', (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const events = apsfRun.readExecution(req.params.id, req.params.file);
+    if (events === null) {
+      res.status(404).json({ error: `Transcript not found: ${req.params.file}` });
+      return;
+    }
+    res.json({ runId: req.params.id, file: req.params.file, events });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * GET /api/runs/apsf/:id/advisory
  * judge_advisory.json（IMPROVE_NEEDED での Judge 推奨）を取得
  */

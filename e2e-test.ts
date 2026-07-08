@@ -315,6 +315,38 @@ async function main(): Promise<void> {
       assert(readFileSync(reviewPath, 'utf-8').includes('検証手順が不足'), 'reason missing in build_review.md');
     });
 
+    await test('Transcript selector: DryRun 実行 → 過去実行を選択して再表示', async () => {
+      // 実行前は「過去の実行はまだありません」の空状態（エラーと区別された明示状態）
+      const emptyState = page.locator('[data-testid="apsf-executions-empty"]');
+      await emptyState.waitFor({ state: 'visible', timeout: 15000 });
+
+      // Return to Build 後の run で DryRun 実行（DryRun はデフォルト ON、AI なし・数 ms で完了）
+      await page.selectOption('[data-testid="apsf-command"]', 'build');
+      await page.click('[data-testid="apsf-execute"]');
+
+      // 実行完了でセレクタに過去実行が 1 件現れる
+      await page.waitForFunction(
+        () => document.querySelectorAll('[data-testid="apsf-transcript-select"] option').length >= 2,
+        undefined,
+        { timeout: 30000 }
+      );
+
+      // 過去実行を選択 → トランスクリプトが再表示される（DryRun の行を含む）
+      const value = await page
+        .locator('[data-testid="apsf-transcript-select"] option')
+        .nth(1)
+        .getAttribute('value');
+      await page.selectOption('[data-testid="apsf-transcript-select"]', value!);
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="apsf-log"]')?.textContent?.includes('DryRun'),
+        undefined,
+        { timeout: 15000 }
+      );
+
+      // ライブへ戻れる
+      await page.selectOption('[data-testid="apsf-transcript-select"]', '');
+    });
+
     // E2E で作成した一時 run を削除
     const { rmSync } = await import('fs');
     rmSync(`${apsfRoot}/runs/work/${E2E_RUN_FULL}`, { recursive: true, force: true });

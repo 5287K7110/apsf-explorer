@@ -8,6 +8,12 @@ import { startRun } from './apsf-native/run-store.js';
 import { writePhase as nativeWritePhase } from './apsf-native/write-phase.js';
 import { applyJudgeDecision, JudgeDecisionResult } from './apsf-native/judge-decision.js';
 import { loadRunState } from './apsf-native/run-state.js';
+import {
+  listTranscripts,
+  readTranscript,
+  TranscriptMeta,
+  TranscriptEvent,
+} from './apsf-native/execution-transcript.js';
 
 /**
  * APSFRunBridge: APSF ワークフローのワークスペース操作層
@@ -279,6 +285,22 @@ export class APSFRunBridge extends EventEmitter {
       throw new Error(`Run ${runName} is currently executing. Wait for completion or cancel first.`);
     }
     return applyJudgeDecision(runDir, decision, reason);
+  }
+
+  /** 過去の実行トランスクリプト一覧（新しい順） */
+  listExecutions(runName: string): TranscriptMeta[] {
+    this.assertRunName(runName);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    return listTranscripts(runDir);
+  }
+
+  /** 実行トランスクリプトの読み出し（ファイル名はホワイトリスト検証） */
+  readExecution(runName: string, filename: string): TranscriptEvent[] | null {
+    this.assertRunName(runName);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    return readTranscript(runDir, filename);
   }
 
   /** judge_advisory.json を読む（存在しなければ null） */

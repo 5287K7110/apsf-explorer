@@ -3,7 +3,9 @@ import {
   RefreshCw, Play, FolderGit2, CircleDot, Loader2, Plus, Save,
   PenLine, Scale, X,
 } from 'lucide-react';
-import { apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision } from '../services/apsfAPI';
+import {
+  apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision, ApsfExecutionMeta,
+} from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
 // フェーズ定義は backend と共有（apsf-native/phases.ts が単一の正）
 import { isHumanPhase } from '../../backend/src/services/apsf-native/phases';
@@ -63,6 +65,14 @@ export const APSFRunPanel: React.FC = () => {
   // Judge 裁定（IMPROVE_NEEDED）
   const [judgeReason, setJudgeReason] = useState('');
   const [judging, setJudging] = useState(false);
+  // 過去実行トランスクリプト（'' = ライブ表示）
+  const [executions, setExecutions] = useState<ApsfExecutionMeta[]>([]);
+  const [executionsLoading, setExecutionsLoading] = useState(false);
+  const [executionsError, setExecutionsError] = useState<string | null>(null);
+  const [viewTranscript, setViewTranscript] = useState('');
+  const [transcriptLogs, setTranscriptLogs] = useState<LogLine[]>([]);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
 
   const logEndRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef(selected);
@@ -118,13 +128,59 @@ export const APSFRunPanel: React.FC = () => {
     }
   }, [appendLog]);
 
+  // 過去実行トランスクリプトの一覧取得
+  // 失敗は空一覧と区別して明示する（「履歴なし」と「取得失敗」は別状態）
+  const loadExecutions = useCallback(async (runId: string) => {
+    if (!runId) return;
+    setExecutionsLoading(true);
+    try {
+      const res = await apsfAPI.getExecutions(runId);
+      setExecutions(res.executions);
+      setExecutionsError(null);
+    } catch (e) {
+      setExecutions([]);
+      setExecutionsError(e instanceof Error ? e.message : '過去の実行一覧を取得できませんでした');
+    } finally {
+      setExecutionsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (selected) {
       setLogs([]);
       setShowEditor(false);
+      setViewTranscript('');
+      setTranscriptLogs([]);
+      setTranscriptError(null);
+      setExecutionsError(null);
       detectPhase(selected);
+      loadExecutions(selected);
     }
-  }, [selected, detectPhase]);
+  }, [selected, detectPhase, loadExecutions]);
+
+  // 過去実行の選択 → トランスクリプトを読み込んで表示
+  // 読み出し失敗はトランスクリプトペイン内に表示する（ライブへ黙って戻さない）
+  const handleSelectTranscript = async (file: string) => {
+    setViewTranscript(file);
+    setTranscriptError(null);
+    if (!file) return; // ライブ表示へ戻る
+    setTranscriptLoading(true);
+    setTranscriptLogs([]);
+    try {
+      const res = await apsfAPI.getExecutionTranscript(selected, file);
+      setTranscriptLogs(res.events.map((e): LogLine => ({
+        ts: e.ts,
+        kind: e.type === 'error' ? 'error' : e.type === 'complete' ? 'complete' : e.type === 'start' ? 'info' : 'log',
+        text: e.type === 'progress'
+          ? String(e.data?.message ?? '').trimEnd()
+          : `[${e.type}] ${JSON.stringify(e.data ?? {})}`,
+      })).filter((l) => l.text));
+    } catch (e) {
+      setTranscriptError(e instanceof Error ? e.message : '選択した実行ログを読み込めませんでした');
+    } finally {
+      setTranscriptLoading(false);
+    }
+  };
 
   // WebSocket イベント購読（選択中 run のみ）
   useEffect(() => {
@@ -142,6 +198,8 @@ export const APSFRunPanel: React.FC = () => {
         // error でも再検出する: 実行失敗は phase_status=failed として
         // durable に記録されるため、failed バナーを即時反映する
         detectPhase(selectedRef.current);
+        // 実行終了でトランスクリプトが 1 件増えている
+        loadExecutions(selectedRef.current);
       }
     };
 
@@ -159,7 +217,7 @@ export const APSFRunPanel: React.FC = () => {
       wsClient.off('error', onError);
       wsClient.off('log', onLog);
     };
-  }, [appendLog, detectPhase]);
+  }, [appendLog, detectPhase, loadExecutions]);
 
   // ログの自動スクロール
   useEffect(() => {
@@ -590,29 +648,97 @@ export const APSFRunPanel: React.FC = () => {
               )}
             </div>
 
-            {/* ライブログ */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 max-h-80 overflow-y-auto font-mono text-xs" data-testid="apsf-log">
-              {logs.length === 0 ? (
-                <p className="text-slate-600">No output yet.</p>
-              ) : (
-                logs.map((l, i) => (
-                  <pre
-                    key={i}
-                    className={`whitespace-pre-wrap break-all ${
-                      l.kind === 'error'
-                        ? 'text-red-400'
-                        : l.kind === 'complete'
-                          ? 'text-green-400'
-                          : l.kind === 'info'
-                            ? 'text-blue-400'
-                            : 'text-slate-300'
-                    }`}
-                  >
-                    {l.text}
-                  </pre>
-                ))
-              )}
-              <div ref={logEndRef} />
+            {/* ログペイン（ライブ / 過去実行トランスクリプト） */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl" data-testid="apsf-log-pane">
+              <div className="flex items-center gap-2 px-4 pt-3 flex-wrap">
+                <select
+                  value={viewTranscript}
+                  onChange={(e) => handleSelectTranscript(e.target.value)}
+                  disabled={executionsLoading}
+                  className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 disabled:opacity-50"
+                  data-testid="apsf-transcript-select"
+                >
+                  <option value="">ライブ</option>
+                  {executions.map((x) => (
+                    <option key={x.file} value={x.file}>
+                      {new Date(x.startedAt).toLocaleString()} ({(x.sizeBytes / 1024).toFixed(1)} KB)
+                    </option>
+                  ))}
+                </select>
+                {executionsLoading && (
+                  <span className="flex items-center gap-1 text-xs text-slate-500">
+                    <Loader2 className="animate-spin" size={10} /> 過去の実行を読み込み中...
+                  </span>
+                )}
+                {!executionsLoading && executionsError && (
+                  <span className="flex items-center gap-2 text-xs text-red-400" data-testid="apsf-executions-error">
+                    過去の実行を読み込めませんでした
+                    <button
+                      onClick={() => loadExecutions(selected)}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300"
+                    >
+                      再試行
+                    </button>
+                  </span>
+                )}
+                {!executionsLoading && !executionsError && executions.length === 0 && (
+                  <span className="text-xs text-slate-500" data-testid="apsf-executions-empty">
+                    過去の実行はまだありません
+                  </span>
+                )}
+                {viewTranscript && (
+                  <span className="text-xs text-slate-500">過去の実行トランスクリプト（読み取り専用）</span>
+                )}
+              </div>
+              <div className="p-4 max-h-80 overflow-y-auto font-mono text-xs" data-testid="apsf-log">
+                {transcriptLoading ? (
+                  <p className="flex items-center gap-2 text-slate-400">
+                    <Loader2 className="animate-spin" size={12} /> loading transcript...
+                  </p>
+                ) : viewTranscript && transcriptError ? (
+                  <div className="space-y-2" data-testid="apsf-transcript-error">
+                    <p className="text-red-400">選択した実行ログを読み込めませんでした: {transcriptError}</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleSelectTranscript(viewTranscript)}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300"
+                      >
+                        再試行
+                      </button>
+                      <button
+                        onClick={() => handleSelectTranscript('')}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300"
+                      >
+                        ライブに戻る
+                      </button>
+                    </div>
+                  </div>
+                ) : (viewTranscript ? transcriptLogs : logs).length === 0 ? (
+                  <p className="text-slate-600">
+                    {viewTranscript
+                      ? 'この実行には表示できるログ行がありません'
+                      : 'No output yet.'}
+                  </p>
+                ) : (
+                  (viewTranscript ? transcriptLogs : logs).map((l, i) => (
+                    <pre
+                      key={i}
+                      className={`whitespace-pre-wrap break-all ${
+                        l.kind === 'error'
+                          ? 'text-red-400'
+                          : l.kind === 'complete'
+                            ? 'text-green-400'
+                            : l.kind === 'info'
+                              ? 'text-blue-400'
+                              : 'text-slate-300'
+                      }`}
+                    >
+                      {l.text}
+                    </pre>
+                  ))
+                )}
+                {!viewTranscript && <div ref={logEndRef} />}
+              </div>
             </div>
           </>
         ) : (

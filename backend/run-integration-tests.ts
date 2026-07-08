@@ -939,6 +939,110 @@ async function main(): Promise<void> {
     } finally {
       rmCrashRuns();
     }
+
+    // ---- 実行トランスクリプト（executions/*.jsonl + REST） ----
+
+    const transcriptRun = '2026-07-05-997_work_explorer-transcript-test';
+    const rmTranscriptRun = () =>
+      rmJudgeRun(resolve(apsfRoot, 'runs/work', transcriptRun), { recursive: true, force: true });
+    rmTranscriptRun();
+
+    try {
+      let transcriptFile = '';
+
+      /** DryRun 実行を発火し、executions が expected 件になるまでポーリング
+       *（DryRun は数 ms で完了し WS 接続前に complete が流れうるため、
+       *  WS 待ちではなく永続化された結果で判定する） */
+      async function runDryAndWait(expected: number): Promise<any[]> {
+        const exec = await fetch(`${BASE}/api/runs/${transcriptRun}/execute`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({
+            command: 'build', provider: 'claude', roles: [], mode: 'apsf-run',
+            context: { dryRun: true },
+          }),
+        });
+        assert(exec.status === 200, `execute failed: ${await exec.text()}`);
+        const deadline = Date.now() + 10000;
+        for (;;) {
+          const r = await fetch(`${BASE}/api/runs/apsf/${transcriptRun}/executions`, { headers: authHeader() });
+          const body = await r.json();
+          assert(r.status === 200, `executions failed: ${JSON.stringify(body).slice(0, 200)}`);
+          if (body.executions.length >= expected) {
+            // complete イベントの追記まで待つ（サイズ安定を確認）
+            const lastEvents = await fetch(
+              `${BASE}/api/runs/apsf/${transcriptRun}/executions/${body.executions[0].file}`,
+              { headers: authHeader() }
+            ).then((x) => x.json());
+            if (lastEvents.events?.some((e: any) => e.type === 'complete' || e.type === 'error')) {
+              return body.executions;
+            }
+          }
+          assert(Date.now() < deadline, `transcript did not reach ${expected} within 10s`);
+          await new Promise((res3) => setTimeout(res3, 200));
+        }
+      }
+
+      await test('Transcript: DryRun 実行でトランスクリプトが生成される', async () => {
+        await createLightRun(transcriptRun, true); // BUILD_NEEDED
+        const executions = await runDryAndWait(1);
+        assert(executions.length === 1, `executions: ${JSON.stringify(executions)}`);
+        const meta = executions[0];
+        assert(/^\d{8}T\d{6}-\d{3}Z-[a-z0-9]{6}\.jsonl$/.test(meta.file), `file name: ${meta.file}`);
+        assert(!Number.isNaN(Date.parse(meta.startedAt)), `startedAt: ${meta.startedAt}`);
+        assert(meta.sizeBytes > 0, 'empty transcript');
+        transcriptFile = meta.file;
+      });
+
+      await test('Transcript: 中身が start/progress/complete を含み REST で読める', async () => {
+        assert(transcriptFile, 'no transcript from previous test');
+        const r = await fetch(
+          `${BASE}/api/runs/apsf/${transcriptRun}/executions/${transcriptFile}`,
+          { headers: authHeader() }
+        );
+        const body = await r.json();
+        assert(r.status === 200, `read failed: ${JSON.stringify(body).slice(0, 200)}`);
+        const types = body.events.map((e: any) => e.type);
+        assert(types[0] === 'start', `first event: ${types[0]}`);
+        assert(types.includes('progress'), 'no progress events');
+        assert(types[types.length - 1] === 'complete', `last event: ${types[types.length - 1]}`);
+        const startData = body.events[0].data;
+        assert(startData.runId === transcriptRun && startData.dryRun === true,
+          `start data: ${JSON.stringify(startData)}`);
+        const progressText = body.events
+          .filter((e: any) => e.type === 'progress')
+          .map((e: any) => String(e.data?.message ?? ''))
+          .join('\n');
+        assert(progressText.includes('DryRun'), 'DryRun progress not recorded');
+      });
+
+      await test('Transcript: 実行のたびに 1 件ずつ増える', async () => {
+        const executions = await runDryAndWait(2);
+        assert(executions.length === 2, `executions: ${executions.length}`);
+        // 新しい順
+        assert(executions[0].file > executions[1].file, 'not sorted newest-first');
+      });
+
+      await test('Transcript: 不正ファイル名は 400、未存在は 404', async () => {
+        const bad = await fetch(
+          `${BASE}/api/runs/apsf/${transcriptRun}/executions/..%2Frun_state.json`,
+          { headers: authHeader() }
+        );
+        assert(bad.status === 400 || bad.status === 404, `expected 400/404, got ${bad.status}`);
+        const evil = await fetch(
+          `${BASE}/api/runs/apsf/${transcriptRun}/executions/evil.jsonl`,
+          { headers: authHeader() }
+        );
+        assert(evil.status === 400, `expected 400, got ${evil.status}`);
+        const missing = await fetch(
+          `${BASE}/api/runs/apsf/${transcriptRun}/executions/20990101T000000-000Z-aaaaaa.jsonl`,
+          { headers: authHeader() }
+        );
+        assert(missing.status === 404, `expected 404, got ${missing.status}`);
+      });
+    } finally {
+      rmTranscriptRun();
+    }
   } else {
     console.log(`⏭️  SKIP  APSF framework tests (not found at ${apsfRoot})`);
   }
