@@ -7,6 +7,7 @@ import { NativeApsfExecutor } from './apsf-native/native-executor.js';
 import { startRun } from './apsf-native/run-store.js';
 import { writePhase as nativeWritePhase } from './apsf-native/write-phase.js';
 import { applyJudgeDecision, JudgeDecisionResult } from './apsf-native/judge-decision.js';
+import { loadRunState } from './apsf-native/run-state.js';
 
 /**
  * APSFRunBridge: APSF ワークフローのワークスペース操作層
@@ -113,6 +114,18 @@ export class APSFRunBridge extends EventEmitter {
   /** run ディレクトリの絶対パス */
   getRunDir(runName: string): string | null {
     return resolveRunDir(this.apsfRoot, runName);
+  }
+
+  /** run_state.json の実行ステータス（failed 表示・回復 UI 用） */
+  getRunStateMeta(runName: string): { phaseStatus: string; lastError: string } {
+    this.assertRunName(runName);
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (!runDir) throw new Error(`Run not found: ${runName}`);
+    const state = loadRunState(runDir);
+    return {
+      phaseStatus: state?.phase_status ?? 'pending',
+      lastError: state?.last_error ?? '',
+    };
   }
 
   /**

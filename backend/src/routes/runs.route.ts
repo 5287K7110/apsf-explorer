@@ -233,6 +233,7 @@ router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
       return;
     }
     const info = apsfRun.getPhaseInfo(req.params.id);
+    const meta = apsfRun.getRunStateMeta(req.params.id);
     res.json({
       runId: req.params.id,
       phase: info.phase,
@@ -240,6 +241,8 @@ router.get('/apsf/:id/phase', async (req: Request, res: Response) => {
       nextRole: info.nextRole,
       humanOwned: info.humanOwned,
       executing: apsfRun.listExecuting().includes(req.params.id),
+      phaseStatus: meta.phaseStatus,
+      lastError: meta.lastError,
     });
   } catch (error) {
     res.status(500).json({

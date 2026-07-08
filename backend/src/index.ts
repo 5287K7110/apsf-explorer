@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import runsRoute from './routes/runs.route.js';
 import authRoute from './routes/auth.route.js';
 import { ExecutionHandler } from './websocket/execution-handler.js';
+import { recoverOrphanedRuns } from './services/apsf-native/recovery.js';
+import { executionEvents } from './services/event-bus.js';
 
 dotenv.config();
 
@@ -48,6 +50,34 @@ wss.on('connection', (socket) => {
 wss.on('error', (error) => {
   console.log('❌ WebSocket error:', error);
 });
+
+// クラッシュ回復: 前回の実行が残した stale マーカーを走査し、
+// orphaned run を failed 化する（「永遠に Executing」の防止）
+if (process.env.APSF_ROOT) {
+  try {
+    const recovered = recoverOrphanedRuns(process.env.APSF_ROOT);
+    for (const r of recovered) {
+      console.log(`♻️  Recovered orphaned run: ${r.runId} (${r.phase}) → ${r.action}`);
+      // 起動後に接続するクライアントは phase API で failed を見るが、
+      // 既接続クライアント向けにも配信しておく（best-effort）
+      executionEvents.emit('event', {
+        type: 'error',
+        runId: r.runId,
+        timestamp: Date.now(),
+        data: {
+          error: r.lastError ?? 'stale execution marker removed',
+          recovered: true,
+          action: r.action,
+        },
+      });
+    }
+    if (recovered.length === 0) {
+      console.log('♻️  Crash recovery: no orphaned runs found');
+    }
+  } catch (e) {
+    console.error('⚠️ Crash recovery failed (continuing startup):', e);
+  }
+}
 
 // Start server
 const PORT = process.env.PORT || 3001;

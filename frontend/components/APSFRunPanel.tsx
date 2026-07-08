@@ -39,6 +39,8 @@ export const APSFRunPanel: React.FC = () => {
   const [phase, setPhase] = useState<string>('');
   const [fileToWrite, setFileToWrite] = useState<string>('');
   const [nextRole, setNextRole] = useState<string>('');
+  const [phaseStatus, setPhaseStatus] = useState<string>('');
+  const [lastError, setLastError] = useState<string>('');
   const [phaseLoading, setPhaseLoading] = useState(false);
   const [command, setCommand] = useState<ApsfCommand>('plan');
   const [provider, setProvider] = useState<'claude' | 'codex'>('claude');
@@ -99,6 +101,8 @@ export const APSFRunPanel: React.FC = () => {
       setPhase(res.phase);
       setFileToWrite(res.fileToWrite || '');
       setNextRole(res.nextRole || '');
+      setPhaseStatus(res.phaseStatus || '');
+      setLastError(res.lastError || '');
       // IMPROVE 系フェーズでは Judge advisory を取得
       if (res.phase.startsWith('IMPROVE')) {
         try {
@@ -135,7 +139,9 @@ export const APSFRunPanel: React.FC = () => {
       if (text) appendLog(kind, text);
       if (kind === 'complete' || kind === 'error') {
         setExecuting(false);
-        if (kind === 'complete') detectPhase(selectedRef.current);
+        // error でも再検出する: 実行失敗は phase_status=failed として
+        // durable に記録されるため、failed バナーを即時反映する
+        detectPhase(selectedRef.current);
       }
     };
 
@@ -404,6 +410,18 @@ export const APSFRunPanel: React.FC = () => {
                   </button>
                 )}
               </div>
+
+              {/* クラッシュ回復による failed 表示（再実行で回復できる） */}
+              {phaseStatus === 'failed' && (
+                <div className="mt-3 p-3 bg-red-950/50 border border-red-800 rounded-lg" data-testid="apsf-failed">
+                  <p className="text-xs font-semibold text-red-300 mb-1">
+                    前回の実行は異常終了しました（再実行で回復できます）
+                  </p>
+                  {lastError && (
+                    <p className="text-xs text-red-400/80 font-mono break-all">{lastError}</p>
+                  )}
+                </div>
+              )}
 
               {/* Judge advisory（IMPROVE 系フェーズ） */}
               {advisory && (

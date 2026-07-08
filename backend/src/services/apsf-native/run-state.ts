@@ -105,6 +105,26 @@ export function saveRunState(runDir: string, state: RunState): void {
   );
 }
 
+/**
+ * phase_status / last_error のみ更新する（遷移しない）。
+ * クラッシュ回復（orphaned run の failed 化）用。run_state.json がない run は無視。
+ */
+export function setPhaseStatus(
+  runDir: string,
+  status: 'pending' | 'in_progress' | 'completed' | 'failed',
+  lastError = ''
+): boolean {
+  const state = loadRunState(runDir);
+  if (!state) return false;
+  saveRunState(runDir, {
+    ...state,
+    phase_status: status,
+    last_error: lastError,
+    error_timestamp: status === 'failed' ? new Date().toISOString() : state.error_timestamp,
+  });
+  return true;
+}
+
 // ── transition_outcome.json（ownership/record.py） ───────────────
 
 export function writeTransitionOutcome(

@@ -231,6 +231,31 @@ async function main(): Promise<void> {
       );
     });
 
+    // ---- クラッシュ回復の failed 表示（回復後の run_state を再現） ----
+    const apsfRootForFail = process.env.APSF_ROOT || 'C:/Users/PC_User/PRJ/ai-problem-solving-framework';
+
+    await test('Failed run: banner with last_error is shown, cleared after next write', async () => {
+      const { readFileSync: rf, writeFileSync: wf } = await import('fs');
+      const statePath = `${apsfRootForFail}/runs/work/${E2E_RUN_FULL}/run_state.json`;
+      // クラッシュ回復（recoverOrphanedRuns）が書く failed 状態を再現
+      const state = JSON.parse(rf(statePath, 'utf-8'));
+      wf(statePath, JSON.stringify({
+        ...state,
+        phase_status: 'failed',
+        last_error: 'Backend terminated during execution (E2E simulated).',
+      }, null, 2));
+
+      await page.click('button[title="Re-detect phase"]');
+      const banner = page.locator('[data-testid="apsf-failed"]');
+      await banner.waitFor({ state: 'visible', timeout: 15000 });
+      assert((await banner.textContent())?.includes('E2E simulated'), 'last_error not displayed');
+
+      // 復旧（次のフェーズ書き込みで status は pending に戻る）
+      wf(statePath, JSON.stringify(state, null, 2));
+      await page.click('button[title="Re-detect phase"]');
+      await banner.waitFor({ state: 'hidden', timeout: 15000 });
+    });
+
     // ---- Judge 裁定（Return to Build）の一連操作 ----
     // BUILD/REVIEW は AI フェーズのため、実 backend REST（実 write-phase）で
     // IMPROVE_NEEDED まで駆動し、裁定の UI 操作だけを実ブラウザで検証する

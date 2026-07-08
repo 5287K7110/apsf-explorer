@@ -759,6 +759,186 @@ async function main(): Promise<void> {
     } finally {
       rmJudgeRuns();
     }
+
+    // ---- クラッシュ回復（executor_state.json マーカー + recoverOrphanedRuns） ----
+
+    const crashRuns = {
+      auto: '2026-07-05-994_work_explorer-crash-auto-test',
+      human: '2026-07-05-995_work_explorer-crash-human-test',
+      kill: '2026-07-05-996_work_explorer-crash-kill-test',
+    };
+    const { writeFileSync: writeCrashFile } = await import('fs');
+    const rmCrashRuns = () => {
+      for (const name of Object.values(crashRuns)) {
+        rmJudgeRun(resolve(apsfRoot, 'runs/work', name), { recursive: true, force: true });
+      }
+    };
+    rmCrashRuns();
+
+    const TASK_MD =
+      '# Task\n\n## What\n\nクラッシュ回復の統合テスト用 run。\n\n' +
+      '## Context\n\n- executor_state.json マーカーの回復動作を検証\n- AI 実行はしない\n\n' +
+      '## Done Criteria\n\n- [x] 回復動作が検証される\n';
+
+    async function createLightRun(runName: string, toBuild: boolean): Promise<void> {
+      const create = await fetch(`${BASE}/api/runs/apsf`, {
+        method: 'POST',
+        headers: authHeader(),
+        body: JSON.stringify({ runName, light: true, taxonomy: 'work' }),
+      });
+      assert(create.status === 200, `create failed: ${await create.text()}`);
+      if (toBuild) await writePhaseApi(runName, 'task.md', TASK_MD);
+    }
+
+    try {
+      await test('Crash recovery: AUTO フェーズの stale マーカー → failed + last_error', async () => {
+        await createLightRun(crashRuns.auto, true); // BUILD_NEEDED (auto)
+        const runDir = resolve(apsfRoot, 'runs/work', crashRuns.auto);
+        writeCrashFile(resolve(runDir, 'executor_state.json'), JSON.stringify({
+          runId: crashRuns.auto, pid: 99999, phase: 'BUILD_NEEDED', startedAt: '2026-07-08T00:00:00Z',
+        }));
+
+        const { recoverOrphanedRuns } = await import('./src/services/apsf-native/recovery.js');
+        const recovered = recoverOrphanedRuns(apsfRoot);
+        const entry = recovered.find((r) => r.runId === crashRuns.auto);
+        assert(entry && entry.action === 'marked_failed', `recovered: ${JSON.stringify(recovered)}`);
+        assert(!judgeFileExists(resolve(runDir, 'executor_state.json')), 'marker not removed');
+
+        // run_state に failed + last_error が永続化され、phase API から見える
+        const p = await fetch(`${BASE}/api/runs/apsf/${crashRuns.auto}/phase`, { headers: authHeader() });
+        const info = await p.json();
+        assert(info.phase === 'BUILD_NEEDED', `phase: ${info.phase}`);
+        assert(info.phaseStatus === 'failed', `phaseStatus: ${info.phaseStatus}`);
+        assert(String(info.lastError).includes('pid=99999'), `lastError: ${info.lastError}`);
+      });
+
+      await test('Crash recovery: human フェーズの stale マーカー → 除去のみ（誤 failed 化しない）', async () => {
+        await createLightRun(crashRuns.human, false); // TASK_NEEDED (human)
+        const runDir = resolve(apsfRoot, 'runs/work', crashRuns.human);
+        writeCrashFile(resolve(runDir, 'executor_state.json'), JSON.stringify({
+          runId: crashRuns.human, pid: 99999, phase: 'BUILD_NEEDED', startedAt: '2026-07-08T00:00:00Z',
+        }));
+
+        const { recoverOrphanedRuns } = await import('./src/services/apsf-native/recovery.js');
+        const recovered = recoverOrphanedRuns(apsfRoot);
+        const entry = recovered.find((r) => r.runId === crashRuns.human);
+        assert(entry && entry.action === 'marker_removed', `recovered: ${JSON.stringify(recovered)}`);
+        assert(!judgeFileExists(resolve(runDir, 'executor_state.json')), 'marker not removed');
+        const p = await fetch(`${BASE}/api/runs/apsf/${crashRuns.human}/phase`, { headers: authHeader() });
+        const info = await p.json();
+        assert(info.phaseStatus !== 'failed', `human run wrongly failed: ${info.phaseStatus}`);
+      });
+
+      await test('Crash recovery: executor 正常系はマーカーを残さない（human 停止ループ）', async () => {
+        const { NativeApsfExecutor } = await import('./src/services/apsf-native/native-executor.js');
+        const executor = new NativeApsfExecutor(apsfRoot);
+        // TASK_NEEDED（human）で即停止するループ — マーカーの書き込み〜削除を通る
+        const result = await executor.executeLoop({ runId: crashRuns.human, provider: 'claude' });
+        assert(result.stopReason === 'human_phase', `stopReason: ${result.stopReason}`);
+        const runDir = resolve(apsfRoot, 'runs/work', crashRuns.human);
+        assert(!judgeFileExists(resolve(runDir, 'executor_state.json')), 'marker left behind');
+      });
+
+      await test('Crash recovery: 実行中の backend を kill -9 相当で強制終了 → 再起動で回復', async () => {
+        const KILL_PORT = PORT + 50;
+        await createLightRun(crashRuns.kill, true); // BUILD_NEEDED
+        const runDir = resolve(apsfRoot, 'runs/work', crashRuns.kill);
+        const markerPath = resolve(runDir, 'executor_state.json');
+
+        const spawnBackend = (): Promise<ChildProcess> => new Promise((res2, rej2) => {
+          const child = spawn('npx tsx src/index.ts', {
+            cwd: __dirname,
+            shell: true,
+            env: {
+              ...process.env,
+              PORT: String(KILL_PORT),
+              JWT_SECRET,
+              APSF_ROOT: apsfRoot,
+              // 実 AI の代わりに長時間実行の fake provider（sleep 120s）
+              APSF_NATIVE_CLI_OVERRIDE: `python "${resolve(FIXTURE_DIR, 'slow_native_cli.py')}" 120`,
+            },
+          });
+          const deadline = Date.now() + 15000;
+          const poll = async () => {
+            try {
+              const r = await fetch(`http://localhost:${KILL_PORT}/health`);
+              if (r.ok) return res2(child);
+            } catch { /* not up */ }
+            if (Date.now() > deadline) return rej2(new Error('kill-test backend did not start'));
+            setTimeout(poll, 300);
+          };
+          poll();
+        });
+
+        // backend #2 で実実行を開始 → executor がマーカーを自書きするのを待つ
+        const b2 = await spawnBackend();
+        const exec = await fetch(`http://localhost:${KILL_PORT}/api/runs/${crashRuns.kill}/execute`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({ command: 'build', provider: 'claude', roles: [], mode: 'apsf-run' }),
+        });
+        assert(exec.status === 200, `execute failed: ${await exec.text()}`);
+        const markerDeadline = Date.now() + 10000;
+        while (!judgeFileExists(markerPath)) {
+          assert(Date.now() < markerDeadline, 'executor did not write its own marker within 10s');
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        const marker = JSON.parse(readJudgeFile(markerPath, 'utf-8'));
+        assert(marker.phase === 'BUILD_NEEDED' && marker.pid && marker.startedAt,
+          `marker schema: ${JSON.stringify(marker)}`);
+
+        // 実行中（fake provider が sleep 中）に SIGKILL 相当で強制終了
+        if (process.platform === 'win32') {
+          execSync(`taskkill /pid ${b2.pid} /T /F`, { stdio: 'pipe' });
+        } else {
+          b2.kill('SIGKILL');
+        }
+        // マーカーはプロセス死後も残存している（クラッシュの再現）
+        assert(judgeFileExists(markerPath), 'marker should survive the kill');
+
+        // backend #3 起動 = 再起動。起動時回復で failed 化される
+        const b3 = await spawnBackend();
+        try {
+          assert(!judgeFileExists(markerPath), 'marker not recovered at startup');
+          const state = JSON.parse(readJudgeFile(resolve(runDir, 'run_state.json'), 'utf-8'));
+          assert(state.phase_status === 'failed', `phase_status: ${state.phase_status}`);
+          assert(String(state.last_error).includes('Backend terminated'), `last_error: ${state.last_error}`);
+        } finally {
+          if (process.platform === 'win32' && b3.pid) {
+            try { execSync(`taskkill /pid ${b3.pid} /T /F`, { stdio: 'pipe' }); } catch { /* dead */ }
+          } else {
+            b3.kill('SIGTERM');
+          }
+        }
+      });
+
+      await test('Crash recovery: 実行失敗（AI 非ゼロ終了）でも failed + last_error が永続化される', async () => {
+        // backend 存命中の失敗経路: withMarker が setPhaseStatus(failed) を記録し
+        // マーカーは削除される（WS エラーは揮発性 — durable 記録の検証）
+        const { NativeApsfExecutor } = await import('./src/services/apsf-native/native-executor.js');
+        const runDir = resolve(apsfRoot, 'runs/work', crashRuns.kill);
+        // 前テストで failed → 再実行に相当する経路として fake failing provider で実行
+        process.env.APSF_NATIVE_CLI_OVERRIDE = `python "${resolve(FIXTURE_DIR, 'failing_native_cli.py')}"`;
+        try {
+          const executor = new NativeApsfExecutor(apsfRoot);
+          let threw = false;
+          try {
+            await executor.executePhase({ runId: crashRuns.kill, provider: 'claude' });
+          } catch {
+            threw = true;
+          }
+          assert(threw, 'failing provider should propagate an error');
+          assert(!judgeFileExists(resolve(runDir, 'executor_state.json')), 'marker should be cleared');
+          const state = JSON.parse(readJudgeFile(resolve(runDir, 'run_state.json'), 'utf-8'));
+          assert(state.phase_status === 'failed', `phase_status: ${state.phase_status}`);
+          assert(String(state.last_error).includes('Execution failed'), `last_error: ${state.last_error}`);
+        } finally {
+          delete process.env.APSF_NATIVE_CLI_OVERRIDE;
+        }
+      });
+    } finally {
+      rmCrashRuns();
+    }
   } else {
     console.log(`⏭️  SKIP  APSF framework tests (not found at ${apsfRoot})`);
   }

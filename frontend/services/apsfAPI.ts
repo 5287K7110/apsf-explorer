@@ -27,6 +27,10 @@ export interface ApsfPhaseInfo {
   fileToWrite?: string;
   nextRole?: string;
   humanOwned?: boolean;
+  executing?: boolean;
+  /** run_state.json の実行ステータス（クラッシュ回復で failed になる） */
+  phaseStatus?: string;
+  lastError?: string;
 }
 
 export interface ApsfAdvisory {

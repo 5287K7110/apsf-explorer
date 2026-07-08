@@ -20,7 +20,7 @@ import { PhaseDetector, resolveRunDir } from './phase-detector.js';
 import { isHumanPhase, AUTO_OWNED_PHASES, ApsfPhase } from './phases.js';
 import { buildPhasePrompt } from './prompt-builder.js';
 import { writePhase, nextPhaseAfterWrite } from './write-phase.js';
-import { transition } from './run-state.js';
+import { transition, atomicWrite, setPhaseStatus } from './run-state.js';
 import { resolveFrameworkRoot } from './content-root.js';
 import { StreamEvent } from '../../types/index.js';
 
@@ -38,8 +38,13 @@ interface CmdResult {
   stderr: string;
 }
 
+/** 実行マーカーのファイル名（クラッシュ回復用。正常終了で削除される） */
+export const EXECUTOR_MARKER = 'executor_state.json';
+
 export class NativeApsfExecutor extends EventEmitter {
   private cancelled = false;
+  /** 実行マーカーを保持中の runId（loop → phase のネストで二重管理しない） */
+  private markerHeldFor: string | null = null;
 
   constructor(private apsfRoot: string) {
     super();
@@ -47,6 +52,80 @@ export class NativeApsfExecutor extends EventEmitter {
 
   cancel(): void {
     this.cancelled = true;
+  }
+
+  // ── 実行マーカー（クラッシュ回復） ────────────────────────────
+  // backend がクラッシュすると実行レジストリ（メモリ）は消え、run は
+  // 「永遠に Executing」に見える。実行中であることを run ディレクトリに
+  // 永続化し、起動時の recoverOrphanedRuns が stale マーカーを failed 化する。
+  // マーカー書き込みの失敗は実行自体を妨げない（best-effort）。
+
+  private markerPath(runId: string): string | null {
+    const runDir = resolveRunDir(this.apsfRoot, runId);
+    return runDir ? path.join(runDir, EXECUTOR_MARKER) : null;
+  }
+
+  /** マーカーを書く/更新する（best-effort）。保持者になったら true */
+  private writeMarker(runId: string, phase: string): boolean {
+    const p = this.markerPath(runId);
+    if (!p) return false;
+    try {
+      // ネスト更新（ループ中のフェーズ表示更新）では startedAt を保持する
+      // 「実行がいつ始まったか」の意味を壊さないため
+      let startedAt = new Date().toISOString();
+      if (fs.existsSync(p)) {
+        try {
+          const prev = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (prev.startedAt) startedAt = prev.startedAt;
+        } catch { /* 壊れた既存マーカーは新規扱い */ }
+      }
+      atomicWrite(p, JSON.stringify({ runId, pid: process.pid, phase, startedAt }, null, 2));
+      return true;
+    } catch {
+      return false; // マーカー失敗で実行を止めない
+    }
+  }
+
+  private clearMarker(runId: string): void {
+    const p = this.markerPath(runId);
+    if (!p) return;
+    try {
+      fs.rmSync(p, { force: true });
+    } catch { /* best-effort */ }
+  }
+
+  /** マーカーの書き込み〜削除で fn を包む（ネスト時は外側が所有） */
+  private async withMarker<T>(runId: string, phase: string, fn: () => Promise<T>): Promise<T> {
+    if (this.markerHeldFor === runId) {
+      // 外側（executeLoop）が所有 — フェーズ表示のみ更新
+      this.writeMarker(runId, phase);
+      return fn();
+    }
+    const owned = this.writeMarker(runId, phase);
+    if (owned) this.markerHeldFor = runId;
+    try {
+      return await fn();
+    } catch (e) {
+      // backend 存命中の実行失敗（AI 非ゼロ終了・タイムアウト等）も
+      // durable に記録する — WS の error イベントは揮発性で、リロード後に
+      // 失敗が見えなくなるため（クラッシュ回復と同じ可視性に揃える）
+      try {
+        const runDir = resolveRunDir(this.apsfRoot, runId);
+        if (runDir) {
+          setPhaseStatus(
+            runDir,
+            'failed',
+            `Execution failed: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      } catch { /* best-effort */ }
+      throw e;
+    } finally {
+      if (owned) {
+        this.clearMarker(runId);
+        this.markerHeldFor = null;
+      }
+    }
   }
 
   private progress(runId: string, message: string, extra: Record<string, unknown> = {}): void {
@@ -118,6 +197,19 @@ export class NativeApsfExecutor extends EventEmitter {
 
     let command: string;
     let args: string[];
+
+    // テスト用オーバーライド: 実 CLI の代わりに任意コマンドを spawn する
+    // （実行中クラッシュ・失敗経路の統合テストで、制御可能な fake provider を使う）
+    const override = process.env.APSF_NATIVE_CLI_OVERRIDE;
+    if (override) {
+      this.progress(runId, `[native] CLI override active: ${override}`, { phase });
+      const res = await this.run(override, [], { stdin: prompt, timeoutMs });
+      if (res.code !== 0) {
+        throw new Error(`override CLI exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`);
+      }
+      if (!res.stdout.trim()) throw new Error('override CLI returned empty output');
+      return res.stdout;
+    }
     // codex の stdout はセッションログ混じりのため、最終メッセージは
     // --output-last-message で temp ファイルに受け取る
     let codexOutFile: string | null = null;
@@ -222,6 +314,9 @@ export class NativeApsfExecutor extends EventEmitter {
       return info.phase;
     }
 
+    // AI 実行〜保存は実行マーカーで包む（クラッシュ時に回復可能にする）
+    return this.withMarker(runId, info.phase, async () => {
+
     // rerun 検出（Judge の Return to Build/Plan 後は対象ファイルが前サイクルの
     // 内容で埋まっている）: 実行前の mtime を記録し、AI がツールで直接更新した
     // のか・前回の残存内容なのかを区別する
@@ -268,6 +363,7 @@ export class NativeApsfExecutor extends EventEmitter {
     }
 
     return this.detectPhase(runId).phase;
+    });
   }
 
   /**
@@ -275,6 +371,13 @@ export class NativeApsfExecutor extends EventEmitter {
    * （apsf-auto-loop.ps1 の TS ネイティブ置き換え）
    */
   async executeLoop(opts: NativeExecuteOptions): Promise<{ phase: string; cycles: number; stopReason: string }> {
+    if (opts.dryRun) return this.loopCore(opts);
+    // ループ全体を 1 つの実行マーカーで包む（サイクル間のクラッシュも回復対象）
+    const initial = this.detectPhase(opts.runId);
+    return this.withMarker(opts.runId, initial.phase, () => this.loopCore(opts));
+  }
+
+  private async loopCore(opts: NativeExecuteOptions): Promise<{ phase: string; cycles: number; stopReason: string }> {
     const maxCycles = opts.maxCycles ?? 10;
     this.cancelled = false;
     let cycles = 0;
