@@ -19,6 +19,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.TEST_PORT || 3210);
 const BASE = `http://localhost:${PORT}`;
 const WS_URL = `ws://localhost:${PORT}`;
+// WS は JWT 認証（?token=）を要求する。トークンは実 /api/auth/login から取得
+// （spawn した backend でも既存 backend でも secret に依存せず成立する）
+let wsAuthUrl = WS_URL;
 const BACKEND_DIR = resolve(__dirname, '../backend');
 const FIXTURE_DIR = resolve(BACKEND_DIR, '__tests__/fixtures');
 
@@ -97,7 +100,7 @@ function executeAndWaitFor(
   timeoutMs = 10000
 ): Promise<any> {
   return new Promise((res, reject) => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(wsAuthUrl);
     const received: string[] = [];
     const timer = setTimeout(() => {
       ws.close();
@@ -124,9 +127,18 @@ async function main(): Promise<void> {
 
   await ensureBackend();
 
+  // frontend と同じ流儀: login で実 JWT を取得し WS URL に付与
+  const login = await fetch(`${BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'fe-test@local', password: 'x' }),
+  });
+  const { token } = await login.json();
+  wsAuthUrl = `${WS_URL}/?token=${encodeURIComponent(token)}`;
+
   await test('Connection: WebSocket connects to real backend', async () => {
     await new Promise<void>((res, reject) => {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsAuthUrl);
       const t = setTimeout(() => reject(new Error('connect timeout')), 5000);
       ws.on('open', () => { clearTimeout(t); ws.close(); res(); });
       ws.on('error', reject);
@@ -169,7 +181,7 @@ async function main(): Promise<void> {
 
   await test('Error Handling: malformed message → error response', async () => {
     await new Promise<void>((res, reject) => {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsAuthUrl);
       const t = setTimeout(() => { ws.close(); reject(new Error('no error response within 5s')); }, 5000);
       ws.on('open', () => ws.send('{not valid json'));
       ws.on('message', (raw) => {

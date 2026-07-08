@@ -20,6 +20,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.TEST_PORT || 3111);
 const BASE = `http://localhost:${PORT}`;
 const WS_URL = `ws://localhost:${PORT}`;
+/** WS は REST と同等の JWT 認証（?token=）を要求する */
+const wsAuthUrl = () =>
+  `${WS_URL}/?token=${encodeURIComponent(jwt.sign({ userId: 'test-user' }, JWT_SECRET))}`;
 const JWT_SECRET = 'integration-test-secret';
 const FIXTURE_DIR = resolve(__dirname, '__tests__/fixtures');
 // 実 APSF Framework の場所（このマシンの実物。他環境では APSF_ROOT で指定）
@@ -106,7 +109,7 @@ function stopBackend(): void {
 /** WS を開き、（何も送らずに）条件を満たすブロードキャストイベントを待つ */
 function waitForEvent(predicate: (msg: any) => boolean, timeoutMs = 10000): Promise<any> {
   return new Promise((res, reject) => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(wsAuthUrl());
     const received: string[] = [];
     const timer = setTimeout(() => {
       ws.close();
@@ -134,7 +137,7 @@ function executeAndWaitFor(
   timeoutMs = 10000
 ): Promise<any> {
   return new Promise((res, reject) => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(wsAuthUrl());
     const received: string[] = [];
     const timer = setTimeout(() => {
       ws.close();
@@ -277,11 +280,79 @@ async function main(): Promise<void> {
 
   await test('WebSocket: connection to real server', async () => {
     await new Promise<void>((res, reject) => {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsAuthUrl());
       const t = setTimeout(() => reject(new Error('connect timeout')), 5000);
       ws.on('open', () => { clearTimeout(t); ws.close(); res(); });
       ws.on('error', reject);
     });
+  });
+
+  await test('WS auth: no token → close(4401)', async () => {
+    const code = await new Promise<number>((res, reject) => {
+      const ws = new WebSocket(WS_URL);
+      const t = setTimeout(() => { ws.close(); reject(new Error('not closed within 5s')); }, 5000);
+      ws.on('close', (c) => { clearTimeout(t); res(c); });
+      ws.on('error', reject);
+    });
+    assert(code === 4401, `close code: ${code}`);
+  });
+
+  await test('WS auth: invalid token → close(4401)', async () => {
+    const code = await new Promise<number>((res, reject) => {
+      const ws = new WebSocket(`${WS_URL}/?token=not-a-jwt`);
+      const t = setTimeout(() => { ws.close(); reject(new Error('not closed within 5s')); }, 5000);
+      ws.on('close', (c) => { clearTimeout(t); res(c); });
+      ws.on('error', reject);
+    });
+    assert(code === 4401, `close code: ${code}`);
+  });
+
+  await test('WS auth: expired token → close(4401)', async () => {
+    const expired = jwt.sign({ userId: 'test-user' }, JWT_SECRET, { expiresIn: -60 });
+    const code = await new Promise<number>((res, reject) => {
+      const ws = new WebSocket(`${WS_URL}/?token=${encodeURIComponent(expired)}`);
+      const t = setTimeout(() => { ws.close(); reject(new Error('not closed within 5s')); }, 5000);
+      ws.on('close', (c) => { clearTimeout(t); res(c); });
+      ws.on('error', reject);
+    });
+    assert(code === 4401, `close code: ${code}`);
+  });
+
+  await test('WS auth: unauthenticated execute is not processed', async () => {
+    // 無認証接続で execute を送り込み、実行が発生しないことを実証する。
+    // 接続は即 close されるため、送信できても executionHandler には届かない
+    const runId = `unauth-${Date.now()}`;
+    const outcome = await new Promise<{ opened: boolean; sent: boolean; closeCode: number; events: string[] }>((res) => {
+      const state = { opened: false, sent: false, closeCode: 0, events: [] as string[] };
+      const ws = new WebSocket(WS_URL);
+      // open が来ても来なくても送信を試みる（close 前に届くかはレース）
+      ws.on('open', () => {
+        state.opened = true;
+        try {
+          ws.send(JSON.stringify({
+            type: 'execute',
+            payload: { runId, provider: 'claude', command: 'plan', roles: [], mode: 'cli-full' },
+          }));
+          state.sent = true;
+        } catch { /* already closing */ }
+      });
+      // 認証前の接続にはいかなるイベントも配信されないこと
+      ws.on('message', (raw) => {
+        try { state.events.push(JSON.parse(raw.toString()).type); } catch { /* ignore */ }
+      });
+      ws.on('close', (code) => { state.closeCode = code; res(state); });
+      ws.on('error', () => res(state));
+    });
+    // 同一シナリオで 4401 close を確認（決定的な証拠）
+    assert(outcome.closeCode === 4401, `close code: ${outcome.closeCode}`);
+    assert(outcome.events.length === 0, `events leaked to unauthenticated socket: ${outcome.events.join(',')}`);
+    // 実行されていれば runs/<runId>/ に artifact が生成される（cli-full）。
+    // executor 起動猶予を見込んで待つ
+    await new Promise((r2) => setTimeout(r2, 1500));
+    const { existsSync } = await import('fs');
+    assert(!existsSync(resolve(__dirname, 'runs', runId)), 'unauthenticated execute was processed!');
+    const health = await fetch(`${BASE}/health`);
+    assert(health.ok, 'backend crashed on unauthenticated execute');
   });
 
   await test('WebSocket: execute → execution-start event', async () => {
@@ -320,7 +391,7 @@ async function main(): Promise<void> {
 
   await test('WebSocket: invalid JSON message → error response', async () => {
     await new Promise<void>((res, reject) => {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsAuthUrl());
       const t = setTimeout(() => { ws.close(); reject(new Error('no error response')); }, 5000);
       ws.on('open', () => ws.send('this is not json'));
       ws.on('message', (raw) => {

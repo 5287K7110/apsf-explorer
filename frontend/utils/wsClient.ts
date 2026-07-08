@@ -1,4 +1,28 @@
 // WebSocket client with auto-reconnect
+import { useAuthStore } from '../store/authStore';
+
+/** backend の未認証 close code（index.ts と対応） */
+export const WS_CLOSE_UNAUTHORIZED = 4401;
+
+/**
+ * authToken の堅牢な読み出し。
+ * 歴史的に raw（apiClient.setToken）と JSON ラップ（authStorage.saveToken）の
+ * 両方式が混在しているため、どちらでも取り出せるようにする。
+ */
+function getAuthToken(): string | null {
+  try {
+    const raw = localStorage.getItem('authToken');
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return typeof parsed === 'string' ? parsed : raw;
+    } catch {
+      return raw; // raw JWT（JSON ではない）
+    }
+  } catch {
+    return null; // localStorage 不可の環境
+  }
+}
 
 export class WSClient {
   private ws: WebSocket | null = null;
@@ -15,15 +39,25 @@ export class WSClient {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      // 4401 が onopen 前に来た場合でも promise が必ず決着するようにする
+      let settled = false;
+      const settleResolve = () => { if (!settled) { settled = true; resolve(); } };
+      const settleReject = (e: unknown) => { if (!settled) { settled = true; reject(e); } };
       try {
         this.intentionalClose = false;
-        this.ws = new WebSocket(this.url);
+        // 接続時点のトークンを付与（REST と同じ localStorage を参照）。
+        // ヘッダはブラウザ WebSocket で付与できないためクエリ方式
+        const token = getAuthToken();
+        const url = token
+          ? `${this.url}${this.url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+          : this.url;
+        this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
           console.log('WebSocket connected');
           this.reconnectAttempts = 0;
           this.reconnectDelay = 1000;
-          resolve();
+          settleResolve();
         };
 
         this.ws.onmessage = (event) => {
@@ -38,10 +72,19 @@ export class WSClient {
 
         this.ws.onerror = (error) => {
           console.error('WebSocket error:', error);
-          reject(error);
+          settleReject(error);
         };
 
-        this.ws.onclose = () => {
+        this.ws.onclose = (event) => {
+          // 未認証（トークンなし/無効/期限切れ）: 再接続せず明示的にログアウト。
+          // 無言で切れると期限切れが分からないため、UI をログイン画面へ誘導する
+          if (event.code === WS_CLOSE_UNAUTHORIZED) {
+            console.error('WebSocket closed: unauthorized (token missing/expired). Logging out.');
+            this.intentionalClose = true;
+            useAuthStore.getState().logout();
+            settleReject(new Error('WebSocket unauthorized (4401)'));
+            return;
+          }
           console.log('WebSocket disconnected');
           // 意図的な切断（unmount 等）では再接続もエラーログも行わない
           if (!this.intentionalClose) {
@@ -49,7 +92,7 @@ export class WSClient {
           }
         };
       } catch (error) {
-        reject(error);
+        settleReject(error);
       }
     });
   }

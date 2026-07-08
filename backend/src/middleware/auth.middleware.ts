@@ -29,6 +29,18 @@ declare global {
   }
 }
 
+/**
+ * トークン検証（REST middleware と WS ハンドシェイクで共有）。
+ * 有効なら payload を、無効/期限切れなら null を返す。
+ */
+export function verifyToken(token: string): { userId?: string } | null {
+  try {
+    return jwt.verify(token, getJwtSecret()) as { userId?: string };
+  } catch {
+    return null;
+  }
+}
+
 export function authenticateToken(
   req: Request,
   res: Response,
@@ -42,11 +54,11 @@ export function authenticateToken(
     return;
   }
 
-  try {
-    const decoded = jwt.verify(token, getJwtSecret());
-    req.userId = (decoded as any).userId;
-    next();
-  } catch (error) {
+  const decoded = verifyToken(token);
+  if (!decoded) {
     res.status(403).json({ error: 'Invalid token' });
+    return;
   }
+  req.userId = decoded.userId;
+  next();
 }

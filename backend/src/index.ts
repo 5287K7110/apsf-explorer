@@ -8,6 +8,7 @@ import authRoute from './routes/auth.route.js';
 import { ExecutionHandler } from './websocket/execution-handler.js';
 import { recoverOrphanedRuns } from './services/apsf-native/recovery.js';
 import { executionEvents } from './services/event-bus.js';
+import { verifyToken } from './middleware/auth.middleware.js';
 
 dotenv.config();
 
@@ -42,8 +43,26 @@ app.get('/health', (req, res) => {
 // WebSocket
 console.log('🔧 WebSocket Server initialized');
 
-wss.on('connection', (socket) => {
-  console.log('✅ Client connected');
+/** WS 用の close code（WebSocket 標準のアプリ定義域 4000-4999） */
+const WS_CLOSE_UNAUTHORIZED = 4401;
+
+wss.on('connection', (socket, req) => {
+  // REST と同等の JWT 認証: ws://host/ws?token=<jwt>
+  // （ブラウザ WebSocket はカスタムヘッダを付けられないためクエリ方式）
+  try {
+    const url = new URL(req.url || '/', 'ws://placeholder');
+    const token = url.searchParams.get('token') || '';
+    const decoded = token ? verifyToken(token) : null;
+    if (!decoded) {
+      console.log('🚫 WS connection rejected: missing/invalid token');
+      socket.close(WS_CLOSE_UNAUTHORIZED, 'unauthorized');
+      return;
+    }
+  } catch {
+    socket.close(WS_CLOSE_UNAUTHORIZED, 'unauthorized');
+    return;
+  }
+  console.log('✅ Client connected (authenticated)');
   executionHandler.handleConnection(socket);
 });
 
