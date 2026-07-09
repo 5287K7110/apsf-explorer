@@ -1,14 +1,19 @@
 /**
  * APSF native 実装 parity test — TS ネイティブ実装 vs 実 python 実装
  *
- * TS 移植（apsf-native/）が python apsf CLI と同一の挙動をすることを検証:
+ * ⚠️ 歴史的リファレンス検証（Historical reference verification）
+ *
+ * TS 実装が「正」（source of truth）として確定したため、本テストは
+ * python CLI がある環境での任意実行用に降格。CI の必須パスではない。
+ * 常時実行されるスナップショットテストは run-apsf-snapshot-test.ts を参照。
+ *
+ * 検証内容:
  *   1. phase 検出   : 全 run で `apsf next --phase-only` と一致
  *   2. start-run    : 生成ファイルがバイト一致、run_state が構造一致
  *   3. write-phase  : 保存・遷移・judge advisory・拒否経路が一致
  *   4. act prompt   : AUTO フェーズ run のプロンプト全文が一致
  *
- * python apsf CLI が PATH にない環境（CI 等）では SKIP する
- * （TS 実装自体は python なしで動作する — それがこのテストの存在意義）。
+ * python apsf CLI が PATH にない環境（CI 等）では SKIP する。
  *
  * 実行: npx tsx run-apsf-parity-test.ts
  */

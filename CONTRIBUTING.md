@@ -27,12 +27,13 @@ servers.
 ## Before opening a PR
 
 ```bash
+cd backend && npx tsx run-apsf-snapshot-test.ts     # must be all PASS (no python needed)
 cd backend && npx tsx run-integration-tests.ts     # must be all PASS
 cd backend && npx tsx run-cli-integration-tests.ts
 npx tsx scripts/run-frontend-integration-tests.ts
 npm run test:e2e
-# If you touched apsf-native/: parity against the Python implementation
-cd backend && npx tsx run-apsf-parity-test.ts
+# Optional: historical cross-verification against Python (requires apsf CLI on PATH)
+# cd backend && npx tsx run-apsf-parity-test.ts
 ```
 
 CI runs the same suites on Linux — cross-platform breakage (path separators,

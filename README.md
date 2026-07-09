@@ -71,9 +71,10 @@ human-gated auto-loop. Specialist definitions and run templates ship in
 `backend/content/`.
 
 It was ported from the original Python APSF framework and verified against it
-with a **51-point parity suite** — phase detection across every real run,
-byte-identical run scaffolding, identical prompts (up to 46 KB, specialist
-selection included), and matching state transitions / advisory records. If you
+with a 51-point parity suite. **The TypeScript implementation is now the source
+of truth** — a 44-point snapshot test (`run-apsf-snapshot-test.ts`) validates it
+against frozen expectations without requiring Python. The historical parity test
+remains available for optional cross-verification when Python is on PATH. If you
 have an existing APSF framework checkout, point `APSF_ROOT` at it and Explorer
 uses its runs/, templates, and specialists; otherwise any directory with an
 empty `runs/` folder works.
@@ -119,10 +120,11 @@ All test suites exercise real implementation code — real processes, real
 WebSocket events, real browser rendering. No mocks, no stubs.
 
 ```bash
-cd backend && npx tsx run-integration-tests.ts     # real backend, 32 tests
+cd backend && npx tsx run-integration-tests.ts     # real backend, 62 tests
 cd backend && npx tsx run-cli-integration-tests.ts # real CLI detection + invocation
 cd backend && npx tsx run-apsf-standalone-test.ts  # empty workspace, no python on PATH
-cd backend && npx tsx run-apsf-parity-test.ts      # TS vs original Python (51 checks)
+cd backend && npx tsx run-apsf-snapshot-test.ts    # TS-as-truth snapshot (44 checks, no python)
+cd backend && npx tsx run-apsf-parity-test.ts      # historical: TS vs Python (51 checks, optional)
 npx tsx scripts/run-frontend-integration-tests.ts  # real WS protocol
 npm run test:e2e                                   # Playwright: login → create → write
 

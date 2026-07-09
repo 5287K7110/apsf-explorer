@@ -30,6 +30,10 @@ jobs:
         run: npm ci
         working-directory: backend
 
+      - name: APSF snapshot tests (TS-as-truth, no python)
+        run: npx tsx run-apsf-snapshot-test.ts
+        working-directory: backend
+
       - name: Backend integration tests (real backend/src)
         run: npx tsx run-integration-tests.ts
         working-directory: backend
