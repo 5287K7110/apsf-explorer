@@ -9,6 +9,7 @@ import { ExecutionHandler } from './websocket/execution-handler.js';
 import { recoverOrphanedRuns } from './services/apsf-native/recovery.js';
 import { executionEvents } from './services/event-bus.js';
 import { verifyToken } from './middleware/auth.middleware.js';
+import { resolveAuthMode } from './services/auth-mode.js';
 
 dotenv.config();
 
@@ -16,6 +17,34 @@ dotenv.config();
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   console.error('❌ FATAL: JWT_SECRET must be set in production.');
   process.exit(1);
+}
+
+// 認証モードの可視化: demo は「任意の資格情報で JWT を発行する」モード。
+// 不正値は黙って demo に降格させない（設定ミスによる無認証公開の防止）
+{
+  const resolution = resolveAuthMode();
+  if (resolution.invalid) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error(
+        `❌ FATAL: Invalid AUTH_MODE '${resolution.raw}'. Use 'demo' or 'basic'. ` +
+          'Refusing to start in production with a misconfigured auth mode.'
+      );
+      process.exit(1);
+    }
+    console.error(
+      `❌ Invalid AUTH_MODE '${resolution.raw}' (use 'demo' or 'basic') — continuing in demo mode for development.`
+    );
+  }
+  if (resolution.mode === 'demo' && process.env.NODE_ENV === 'production') {
+    console.warn(
+      '⚠️  AUTH_MODE=demo in production: /api/auth/login accepts ANY credentials. ' +
+        'Set AUTH_MODE=basic with USERS_FILE for real authentication.'
+    );
+  }
+  if (resolution.mode === 'basic' && !process.env.USERS_FILE) {
+    console.warn('⚠️  AUTH_MODE=basic but USERS_FILE is not set — all logins will fail.');
+  }
+  console.log(`🔐 Auth mode: ${resolution.mode}`);
 }
 
 const app = express();

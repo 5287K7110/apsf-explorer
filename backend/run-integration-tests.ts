@@ -1421,6 +1421,162 @@ async function main(): Promise<void> {
     }
   });
 
+  // ---- 認証モード（AUTH_MODE=demo / basic） ----
+
+  await test('Auth mode: demo — GET /auth/mode が demo、任意資格情報でログイン可', async () => {
+    // メイン backend は AUTH_MODE 未設定 = demo（既定）
+    const mode = await fetch(`${BASE}/api/auth/mode`).then((r) => r.json());
+    assert(mode.mode === 'demo', `mode: ${mode.mode}`);
+    const login = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'anyone@anywhere', password: 'whatever' }),
+    });
+    assert(login.status === 200, `demo login status: ${login.status}`);
+    const body = await login.json();
+    assert(typeof body.token === 'string' && body.token.length > 0, 'no token issued');
+  });
+
+  await test('Auth mode: basic — 正しい資格情報 200 / 誤り 401 / register 403', async () => {
+    const BASIC_PORT = PORT + 70;
+    const child = spawn('npx tsx src/index.ts', {
+      cwd: __dirname,
+      shell: true,
+      env: {
+        ...process.env,
+        PORT: String(BASIC_PORT),
+        JWT_SECRET,
+        AUTH_MODE: 'basic',
+        USERS_FILE: resolve(FIXTURE_DIR, 'users.json'),
+      },
+    });
+    try {
+      const deadline = Date.now() + 15000;
+      for (;;) {
+        try {
+          const r = await fetch(`http://localhost:${BASIC_PORT}/health`);
+          if (r.ok) break;
+        } catch { /* not up */ }
+        assert(Date.now() < deadline, 'basic-mode backend did not start');
+        await new Promise((r2) => setTimeout(r2, 300));
+      }
+      const B = `http://localhost:${BASIC_PORT}`;
+
+      // モード公開
+      const mode = await fetch(`${B}/api/auth/mode`).then((r) => r.json());
+      assert(mode.mode === 'basic', `mode: ${mode.mode}`);
+
+      // 正しい資格情報 → 200 + 実 JWT（保護 API が呼べる）
+      const ok = await fetch(`${B}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin@test.local', password: 'correct-horse' }),
+      });
+      assert(ok.status === 200, `valid login status: ${ok.status}`);
+      const { token } = await ok.json();
+      const protectedCall = await fetch(`${B}/api/runs/providers`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert(protectedCall.status === 200, `protected API with basic token: ${protectedCall.status}`);
+
+      // 誤パスワード → 401（存在有無を漏らさない同一メッセージ）
+      const wrongPw = await fetch(`${B}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin@test.local', password: 'wrong' }),
+      });
+      assert(wrongPw.status === 401, `wrong password status: ${wrongPw.status}`);
+      const wrongPwBody = await wrongPw.json();
+
+      // 未知ユーザー → 401 で同一メッセージ（ユーザー列挙の防止）
+      const noUser = await fetch(`${B}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'ghost@test.local', password: 'whatever' }),
+      });
+      assert(noUser.status === 401, `unknown user status: ${noUser.status}`);
+      const noUserBody = await noUser.json();
+      assert(wrongPwBody.error === noUserBody.error,
+        `error messages differ: "${wrongPwBody.error}" vs "${noUserBody.error}"`);
+
+      // register は 403（管理者のファイル運用）
+      const reg = await fetch(`${B}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'new@test.local', password: 'x', name: 'x' }),
+      });
+      assert(reg.status === 403, `register status: ${reg.status}`);
+    } finally {
+      if (process.platform === 'win32' && child.pid) {
+        try { execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'pipe' }); } catch { /* dead */ }
+      } else {
+        child.kill('SIGTERM');
+      }
+    }
+  });
+
+  await test('Auth mode: 本番 + demo は起動時に警告ログを出す', async () => {
+    const WARN_PORT = PORT + 80;
+    let output = '';
+    const child = spawn('npx tsx src/index.ts', {
+      cwd: __dirname,
+      shell: true,
+      env: {
+        ...process.env,
+        PORT: String(WARN_PORT),
+        NODE_ENV: 'production',
+        JWT_SECRET,
+        AUTH_MODE: 'demo',
+      },
+    });
+    child.stdout?.on('data', (d) => (output += d.toString()));
+    child.stderr?.on('data', (d) => (output += d.toString()));
+    try {
+      const deadline = Date.now() + 15000;
+      for (;;) {
+        try {
+          const r = await fetch(`http://localhost:${WARN_PORT}/health`);
+          if (r.ok) break;
+        } catch { /* not up */ }
+        assert(Date.now() < deadline, 'warn-test backend did not start');
+        await new Promise((r2) => setTimeout(r2, 300));
+      }
+      assert(output.includes('AUTH_MODE=demo in production'), `warning missing. output: ${output.slice(0, 300)}`);
+    } finally {
+      if (process.platform === 'win32' && child.pid) {
+        try { execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'pipe' }); } catch { /* dead */ }
+      } else {
+        child.kill('SIGTERM');
+      }
+    }
+  });
+
+  await test('Auth mode: 本番 + 不正な AUTH_MODE は起動拒否（exit 1）', async () => {
+    let output = '';
+    const code = await new Promise<number | null>((res, reject) => {
+      const child = spawn(`npx tsx "${resolve(__dirname, 'src/index.ts')}"`, {
+        cwd: FIXTURE_DIR, // .env のないディレクトリ（dotenv 経由の env 供給を防ぐ）
+        shell: true,
+        env: {
+          ...process.env,
+          NODE_ENV: 'production',
+          PORT: '3299',
+          JWT_SECRET,
+          AUTH_MODE: 'basci', // typo を模した不正値
+        },
+      });
+      child.stdout?.on('data', (d) => (output += d.toString()));
+      child.stderr?.on('data', (d) => (output += d.toString()));
+      const t = setTimeout(() => {
+        child.kill();
+        reject(new Error('did not exit within 10s — started with invalid AUTH_MODE?'));
+      }, 10000);
+      child.on('close', (c) => { clearTimeout(t); res(c); });
+    });
+    assert(code === 1, `expected exit 1, got ${code}`);
+    assert(output.includes("Invalid AUTH_MODE 'basci'"), `error message missing: ${output.slice(0, 300)}`);
+  });
+
   stopBackend();
 
   // ---- セキュリティ: 本番起動ガード ----

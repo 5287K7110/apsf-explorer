@@ -1,16 +1,19 @@
 import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { authenticateToken } from '../middleware/auth.middleware.js';
+import { verifyUser } from '../services/users-store.js';
+import { getAuthMode } from '../services/auth-mode.js';
 
 /**
- * Auth routes (Demo Mode)
+ * Auth routes — AUTH_MODE で demo / basic を明示的に切り替える
  *
- * LoginPage の「Use any email and password to test. Authentication is mocked.」
- * を実際に成立させる: 任意の資格情報を受け付け、本物の JWT
- * （auth.middleware と同じ秘密鍵で署名）を発行する。
- * これにより frontend は保護された /api/runs 系エンドポイントを実際に呼べる。
- *
- * NOTE: 本番でユーザー管理が必要になったらここを実装で置き換える。
+ * - demo（既定）: 任意の資格情報で本物の JWT を発行（ローカルデモ用）。
+ *   「認証があるように見えて何も守っていない」ことを設定として可視化する
+ *   ため、GET /auth/mode でモードを公開し UI の Demo 表記を連動させる。
+ *   本番 + demo は起動時に警告ログを出す（index.ts）。
+ * - basic: USERS_FILE（email → bcrypt hash）の照合。誤資格情報は 401
+ *   （ユーザー不在との区別を漏らさない同一メッセージ）。register は 403
+ *   （ユーザー管理は管理者のファイル運用）。
  */
 const router = Router();
 
@@ -28,18 +31,38 @@ function demoUser(email: string, name?: string) {
   };
 }
 
+/** 認証モードの公開（UI の Demo 表記の表示制御用） */
+router.get('/mode', (_req: Request, res: Response) => {
+  res.json({ mode: getAuthMode() });
+});
+
 router.post('/login', (req: Request, res: Response) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
     res.status(400).json({ error: 'email and password are required' });
     return;
   }
+
+  if (getAuthMode() === 'basic') {
+    if (!verifyUser(email, password)) {
+      // ユーザー不在 / パスワード不一致を区別しない同一メッセージ
+      res.status(401).json({ error: 'Invalid email or password' });
+      return;
+    }
+  }
+  // demo モードは任意の資格情報を受け付ける（現挙動を維持）
+
   const user = demoUser(email);
   const token = signToken(user.id, email);
   res.json({ token, refreshToken: token, user });
 });
 
 router.post('/register', (req: Request, res: Response) => {
+  if (getAuthMode() === 'basic') {
+    // basic のユーザー管理は管理者の USERS_FILE 運用（self-register 不可）
+    res.status(403).json({ error: 'Registration is disabled. Users are managed by the administrator.' });
+    return;
+  }
   const { email, password, name } = req.body || {};
   if (!email || !password) {
     res.status(400).json({ error: 'email and password are required' });

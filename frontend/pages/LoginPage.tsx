@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { authAPI } from '../services/authAPI';
 
 export function LoginPage() {
   const { login, register, loading, error, isAuthenticated } = useAuth();
@@ -8,6 +9,24 @@ export function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [name, setName] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  // 認証モード: null（未取得）→ demo | basic。
+  // 判明するまで Sign-up トグルも Demo ヒントも出さない（basic デプロイでの一瞬露出を防止）。
+  // apiClient 経由で VITE_API_URL を尊重する（分離デプロイ対応）。
+  const [authMode, setAuthMode] = useState<'demo' | 'basic' | null>(null);
+
+  useEffect(() => {
+    authAPI.getMode()
+      .then((mode) => setAuthMode(mode))
+      .catch(() => {
+        // backend 未起動等: unknown のまま — demo 表示にフォールバックしない
+      });
+  }, []);
+
+  // basic ではユーザー管理は管理者の USERS_FILE 運用 — Sign-up UI は出さない。
+  // mode 応答がトグル操作より後に届いた場合もサインインに戻す
+  useEffect(() => {
+    if (authMode === 'basic') setIsSignUp(false);
+  }, [authMode]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -129,31 +148,40 @@ export function LoginPage() {
           </button>
         </form>
 
-        {/* Toggle Sign Up / Sign In */}
-        <div className="mt-6 text-center">
-          <p className="text-sm text-slate-400">
-            {isSignUp ? 'Already have an account?' : "Don't have an account?"}
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setLocalError(null);
-                setEmail('');
-                setPassword('');
-                setName('');
-              }}
-              className="ml-2 text-blue-400 hover:text-blue-300 font-medium transition"
-            >
-              {isSignUp ? 'Sign in' : 'Sign up'}
-            </button>
-          </p>
-        </div>
+        {/* Toggle Sign Up / Sign In — demo 確定時のみ表示（null/basic では出さない） */}
+        {authMode === 'demo' && (
+          <div className="mt-6 text-center" data-testid="auth-signup-toggle">
+            <p className="text-sm text-slate-400">
+              {isSignUp ? 'Already have an account?' : "Don't have an account?"}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setLocalError(null);
+                  setEmail('');
+                  setPassword('');
+                  setName('');
+                }}
+                className="ml-2 text-blue-400 hover:text-blue-300 font-medium transition"
+              >
+                {isSignUp ? 'Sign in' : 'Sign up'}
+              </button>
+            </p>
+          </div>
+        )}
 
-        {/* Demo Hint */}
-        <div className="mt-6 p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-xs text-slate-400">
-          <p className="font-medium text-slate-300 mb-1">Demo Mode</p>
-          <p>Use any email and password to test. Authentication is mocked.</p>
-        </div>
+        {/* Demo Hint — AUTH_MODE=demo のときだけ表示（/api/auth/mode 連動） */}
+        {authMode === 'demo' && (
+          <div className="mt-6 p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-xs text-slate-400" data-testid="auth-demo-hint">
+            <p className="font-medium text-slate-300 mb-1">Demo Mode</p>
+            <p>Use any email and password to test. Authentication is mocked.</p>
+          </div>
+        )}
+        {authMode === 'basic' && (
+          <div className="mt-6 p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-xs text-slate-400" data-testid="auth-basic-hint">
+            <p>Sign in with credentials provided by your administrator.</p>
+          </div>
+        )}
       </div>
     </div>
   );

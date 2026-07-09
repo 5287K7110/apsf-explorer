@@ -83,6 +83,11 @@ export const authAPI = {
     });
   },
 
+  async getMode(): Promise<'demo' | 'basic'> {
+    const res = await apiClient.get<{ mode: string }>('/auth/mode');
+    return res.mode === 'basic' ? 'basic' : 'demo';
+  },
+
   isAuthenticated(): boolean {
     return !!authStorage.getToken();
   },

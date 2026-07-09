@@ -132,9 +132,12 @@ RUN_REAL_CLI=1 npx tsx backend/run-cli-integration-tests.ts
 
 ## Security notes
 
-- Demo auth accepts any credentials and issues real JWTs — **do not expose
-  this to the internet as-is**. Production requires `JWT_SECRET` (the server
-  refuses to start without it).
+- Auth has two explicit modes (`AUTH_MODE`): `demo` (default) accepts any
+  credentials and issues real JWTs — **do not expose this to the internet
+  as-is**; the server warns loudly when demo mode runs in production.
+  `basic` checks credentials against a `USERS_FILE` (email → bcrypt hash);
+  wrong credentials get 401 and self-registration is disabled (403).
+  Production requires `JWT_SECRET` (the server refuses to start without it).
 - BUILD phases run the AI CLI with file-write tools enabled
   (`APSF_PERMISSION_MODE`, default `acceptEdits`). Run in a workspace you
   trust the agent to edit.

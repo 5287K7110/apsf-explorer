@@ -91,9 +91,16 @@ async function main(): Promise<void> {
   const page: Page = await browser.newPage();
   const consoleErrors: string[] = [];
   page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(msg.text());
+    // URL 付きで記録する（リソース読み込み失敗の発生元を特定できるように）
+    if (msg.type() === 'error') consoleErrors.push(`${msg.text()} [${msg.location()?.url ?? ''}]`);
   });
   page.on('pageerror', (err) => consoleErrors.push(err.message));
+
+  // backend 未起動でも authMode=demo を確定させるため /api/auth/mode をモック
+  // （backend 起動済みの場合は実レスポンスが先に返るが、モックが優先される）
+  await page.route('**/api/auth/mode', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ mode: 'demo' }) })
+  );
 
   await test('Page loads at ' + URL, async () => {
     const res = await page.goto(URL, { waitUntil: 'networkidle', timeout: 20000 });
@@ -108,7 +115,10 @@ async function main(): Promise<void> {
   await test('React mounted without runtime errors', async () => {
     const rootHtml = await page.locator('#root').innerHTML();
     assert(rootHtml.length > 100, `#root nearly empty (${rootHtml.length} bytes) — React failed to mount`);
-    const fatal = consoleErrors.filter((e) => !e.includes('WebSocket') && !e.includes('favicon'));
+    // /api/auth/mode の読み込み失敗のみ許容（route mock 漏れ等で発生しうるノイズ）
+    const fatal = consoleErrors.filter(
+      (e) => !e.includes('WebSocket') && !e.includes('favicon') && !e.includes('/api/auth/mode')
+    );
     assert(fatal.length === 0, `console errors: ${fatal.slice(0, 3).join(' | ')}`);
   });
 
@@ -132,6 +142,25 @@ async function main(): Promise<void> {
   await test('Demo Mode text is displayed', async () => {
     const demo = page.locator('text=Demo Mode');
     await demo.waitFor({ state: 'visible', timeout: 5000 });
+  });
+
+  await test('Basic auth mode: Sign-up UI が出ない（mode エンドポイントをモック）', async () => {
+    // basic backend を別途立てずに、ブラウザ層で /api/auth/mode を basic に固定して
+    // LoginPage のモード連動（Sign-up 非表示・basic ヒント表示）を検証する
+    const page2 = await browser!.newPage();
+    try {
+      await page2.route('**/api/auth/mode', (route) =>
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ mode: 'basic' }) })
+      );
+      await page2.goto(URL, { waitUntil: 'networkidle', timeout: 20000 });
+      await page2.locator('[data-testid="auth-basic-hint"]').waitFor({ state: 'visible', timeout: 10000 });
+      assert(await page2.locator('[data-testid="auth-signup-toggle"]').count() === 0,
+        'signup toggle visible in basic mode');
+      assert(await page2.locator('[data-testid="auth-demo-hint"]').count() === 0,
+        'demo hint visible in basic mode');
+    } finally {
+      await page2.close();
+    }
   });
 
   await test('Tailwind CSS is applied (not default styles)', async () => {
