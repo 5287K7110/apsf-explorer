@@ -1,0 +1,75 @@
+import React from 'react';
+import { Loader2, Play } from 'lucide-react';
+import { ApsfCommand } from '../../services/apsfAPI';
+
+interface Props {
+  command: ApsfCommand;
+  onCommandChange: (v: ApsfCommand) => void;
+  provider: 'claude' | 'codex';
+  onProviderChange: (v: 'claude' | 'codex') => void;
+  dryRun: boolean;
+  onDryRunChange: (v: boolean) => void;
+  selectedActive: boolean;
+  submitting: boolean;
+  onExecute: () => void;
+  queueState: { running: string | null; queued: string[] };
+  selected: string;
+}
+
+export const ExecutionControls: React.FC<Props> = ({
+  command, onCommandChange, provider, onProviderChange,
+  dryRun, onDryRunChange, selectedActive, submitting,
+  onExecute, queueState, selected,
+}) => (
+  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+    <div className="flex items-center gap-3 flex-wrap">
+      <select
+        value={command}
+        onChange={(e) => onCommandChange(e.target.value as ApsfCommand)}
+        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200"
+        data-testid="apsf-command"
+      >
+        <option value="plan">plan</option>
+        <option value="build">build</option>
+        <option value="review">review</option>
+        <option value="full-cycle">full-cycle (auto-loop)</option>
+      </select>
+      <select
+        value={provider}
+        onChange={(e) => onProviderChange(e.target.value as 'claude' | 'codex')}
+        className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200"
+        data-testid="apsf-provider"
+      >
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+      </select>
+      <label className="flex items-center gap-2 text-sm text-slate-300">
+        <input
+          type="checkbox"
+          checked={dryRun}
+          onChange={(e) => onDryRunChange(e.target.checked)}
+          className="rounded"
+        />
+        DryRun（AI 実行なし・プロンプト確認のみ）
+      </label>
+      <button
+        onClick={onExecute}
+        disabled={selectedActive || submitting}
+        data-testid="apsf-execute"
+        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition"
+      >
+        {selectedActive || submitting ? <Loader2 className="animate-spin" size={14} /> : <Play size={14} />}
+        {queueState.running === selected
+          ? 'Executing...'
+          : queueState.queued.includes(selected)
+            ? `Queued (#${queueState.queued.indexOf(selected) + 1})`
+            : 'Execute'}
+      </button>
+    </div>
+    {!dryRun && (
+      <p className="text-xs text-amber-400">
+        ⚠ 実 AI を起動します（トークン消費・時間がかかります）
+      </p>
+    )}
+  </div>
+);
