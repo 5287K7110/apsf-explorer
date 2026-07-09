@@ -26,13 +26,13 @@ export function useWebSocket() {
 
         // Listen for run updates
         wsClient.on('run-updated', (data: any) => {
-          console.log('Run updated via WebSocket:', data);
+          console.debug('Run updated via WebSocket:', data);
           updateRun(data.runId, data.updates);
         });
 
         // Listen for phase progress
         wsClient.on('phase-progress', (data: any) => {
-          console.log('Phase progress via WebSocket:', data);
+          console.debug('Phase progress via WebSocket:', data);
           updateRunPhase(data.runId, data.phase, data.progress);
         });
 

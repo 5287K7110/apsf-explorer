@@ -54,7 +54,7 @@ export class WSClient {
         this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
-          console.log('WebSocket connected');
+          console.debug('WebSocket connected');
           this.reconnectAttempts = 0;
           this.reconnectDelay = 1000;
           settleResolve();
@@ -85,7 +85,7 @@ export class WSClient {
             settleReject(new Error('WebSocket unauthorized (4401)'));
             return;
           }
-          console.log('WebSocket disconnected');
+          console.debug('WebSocket disconnected');
           // 意図的な切断（unmount 等）では再接続もエラーログも行わない
           if (!this.intentionalClose) {
             this.attemptReconnect();
@@ -101,7 +101,7 @@ export class WSClient {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       const delay = Math.pow(2, this.reconnectAttempts - 1) * this.reconnectDelay;
-      console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      console.debug(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
       setTimeout(() => this.connect().catch(err => {
         console.error('Reconnection failed:', err);
       }), delay);

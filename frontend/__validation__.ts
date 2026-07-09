@@ -58,7 +58,7 @@ export const validatePhase1And2 = (): boolean => {
 
 // Run validation on module load
 if (validatePhase1And2()) {
-  console.log('✓ Phase 1-2 Implementation: All files validated successfully');
+  console.debug('✓ Phase 1-2 Implementation: All files validated successfully');
 } else {
   console.error('✗ Phase 1-2 Implementation: Validation failed');
 }
