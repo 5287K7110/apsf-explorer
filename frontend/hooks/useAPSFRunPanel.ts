@@ -86,9 +86,10 @@ export function useAPSFRunPanel() {
   // キュー状態: マウント時に取得 + canonical queue イベントでライブ更新
   useEffect(() => {
     apsfAPI.getQueue().then(setQueueState).catch(() => { /* best-effort */ });
-    const onQueue = (msg: any) => {
-      if (msg.data && 'queued' in msg.data) {
-        setQueueState({ running: msg.data.running ?? null, queued: msg.data.queued ?? [] });
+    const onQueue = (msg: Record<string, unknown>) => {
+      const d = msg.data as Record<string, unknown> | undefined;
+      if (d && 'queued' in d) {
+        setQueueState({ running: (d.running as string) ?? null, queued: (d.queued as string[]) ?? [] });
       }
     };
     wsClient.on('queue', onQueue);
@@ -178,14 +179,15 @@ export function useAPSFRunPanel() {
 
   // WebSocket イベント購読
   useEffect(() => {
-    const onEvent = (kind: LogLine['kind']) => (data: any) => {
+    const onEvent = (kind: LogLine['kind']) => (data: Record<string, unknown>) => {
       if (data.runId !== selectedRef.current) return;
+      const d = data.data as Record<string, unknown> | undefined;
       const text =
         kind === 'complete'
-          ? `完了 (phase=${data.data?.phase ?? '?'}${data.data?.stopReason ? `, stop=${data.data.stopReason}` : ''})`
+          ? `完了 (phase=${d?.phase ?? '?'}${d?.stopReason ? `, stop=${d.stopReason}` : ''})`
           : kind === 'error'
-            ? String(data.data?.error ?? 'unknown error')
-            : String(data.data?.message ?? '').trimEnd();
+            ? String(d?.error ?? 'unknown error')
+            : String(d?.message ?? '').trimEnd();
       if (text) appendLog(kind, text);
       if (kind === 'complete' || kind === 'error') {
         detectPhase(selectedRef.current);

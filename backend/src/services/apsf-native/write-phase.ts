@@ -146,7 +146,7 @@ export function parseReviewJudgeAdvisory(reviewText: string): {
         'multiple blocks are not allowed.'
     );
   }
-  let payload: any;
+  let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(matches[0][1]);
   } catch {

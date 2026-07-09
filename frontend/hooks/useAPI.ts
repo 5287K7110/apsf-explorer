@@ -153,7 +153,7 @@ export function useAPI() {
     }
   }, []);
 
-  const createRun = useCallback(async (config: any): Promise<boolean> => {
+  const createRun = useCallback(async (config: { domain: string; description: string; acCount?: number }): Promise<boolean> => {
     setLoading(true);
     setError(null);
 

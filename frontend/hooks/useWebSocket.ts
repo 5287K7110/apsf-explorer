@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { wsClient } from '../utils/wsClient';
 import { useRunStore } from '../store/runStore';
+import type { Phase } from '../types';
 
 export function useWebSocket() {
   const isConnected = useRef(false);
@@ -25,19 +26,19 @@ export function useWebSocket() {
         }
 
         // Listen for run updates
-        wsClient.on('run-updated', (data: any) => {
+        wsClient.on('run-updated', (data: Record<string, unknown>) => {
           console.debug('Run updated via WebSocket:', data);
-          updateRun(data.runId, data.updates);
+          updateRun(data.runId as string, data.updates as Record<string, unknown>);
         });
 
         // Listen for phase progress
-        wsClient.on('phase-progress', (data: any) => {
+        wsClient.on('phase-progress', (data: Record<string, unknown>) => {
           console.debug('Phase progress via WebSocket:', data);
-          updateRunPhase(data.runId, data.phase, data.progress);
+          updateRunPhase(data.runId as string, data.phase as Phase, data.progress as number);
         });
 
         // Listen for errors
-        wsClient.on('error', (error: any) => {
+        wsClient.on('error', (error: Record<string, unknown>) => {
           console.error('WebSocket error event:', error);
           setConnectionStatus('error');
         });
@@ -60,7 +61,7 @@ export function useWebSocket() {
     };
   }, [updateRun, updateRunPhase, setConnectionStatus]);
 
-  const sendMessage = useCallback((type: string, data: any) => {
+  const sendMessage = useCallback((type: string, data: unknown) => {
     if (isConnected.current) {
       wsClient.send({ type, data });
     } else {

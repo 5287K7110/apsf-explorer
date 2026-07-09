@@ -41,7 +41,7 @@ interface RunStore {
 
 export const useRunStore = create<RunStore>((set, get) => {
   // Load runs from localStorage or initialize with mock data
-  const savedRuns = runStorage.getRuns();
+  const savedRuns = runStorage.getRuns() as Run[];
   const initialRuns = savedRuns.length > 0 ? savedRuns : generateMockRuns(8);
   const activeRunId = initialRuns[0].id;
 

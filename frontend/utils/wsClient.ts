@@ -127,7 +127,7 @@ export class WSClient {
     }
   }
 
-  send(data: any) {
+  send(data: unknown) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     } else {

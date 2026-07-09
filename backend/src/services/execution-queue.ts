@@ -44,7 +44,7 @@ async function runExecution(entry: QueueEntry, executor: NativeApsfExecutor): Pr
   const { request, emitter, apsfRoot } = entry;
   try {
     const provider = request.provider === 'codex' ? 'codex' : 'claude';
-    const dryRun = Boolean(request.context && (request.context as any).dryRun);
+    const dryRun = Boolean(request.context?.dryRun);
     const isLoop = request.command === 'full-cycle';
 
     console.log(

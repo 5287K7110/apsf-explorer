@@ -26,7 +26,7 @@ export class APIClient {
   async request<T>(
     method: string,
     endpoint: string,
-    data?: any
+    data?: unknown
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
     const headers: HeadersInit = {
@@ -58,11 +58,11 @@ export class APIClient {
     return this.request<T>('GET', endpoint);
   }
 
-  post<T>(endpoint: string, data: any) {
+  post<T>(endpoint: string, data: unknown) {
     return this.request<T>('POST', endpoint, data);
   }
 
-  put<T>(endpoint: string, data: any) {
+  put<T>(endpoint: string, data: unknown) {
     return this.request<T>('PUT', endpoint, data);
   }
 

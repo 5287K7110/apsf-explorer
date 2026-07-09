@@ -88,7 +88,7 @@ export class CLIFullExecutor extends EventEmitter {
   ): Promise<void> {
     let output = '';
     let errOutput = '';
-    const artifacts: any[] = [];
+    const artifacts: Record<string, unknown>[] = [];
 
     child.stdout?.on('data', (data) => {
       const chunk = data.toString();
@@ -154,7 +154,7 @@ export class CLIFullExecutor extends EventEmitter {
    */
   private saveArtifacts(
     runId: string,
-    artifacts: any[],
+    artifacts: Record<string, unknown>[],
     output: string
   ): void {
     const runDir = path.join(this.runsDir, runId);

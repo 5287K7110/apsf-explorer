@@ -2,7 +2,7 @@
 export interface APIRequest {
   method: string;
   endpoint: string;
-  data?: any;
+  data?: unknown;
 }
 
 export interface APIResponse<T = any> {
@@ -15,7 +15,7 @@ export interface APIResponse<T = any> {
 // WebSocket message types
 export interface WSMessage {
   type: string;
-  data: any;
+  data: unknown;
   timestamp: number;
 }
 

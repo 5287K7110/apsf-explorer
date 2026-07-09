@@ -1,4 +1,5 @@
 // localStorage utilities with type safety
+import type { User } from '../types/auth';
 
 export const storage = {
   setItem<T>(key: string, value: T) {
@@ -57,38 +58,38 @@ export const authStorage = {
     storage.removeItem('user');
   },
 
-  saveUser(user: any) {
+  saveUser(user: User) {
     storage.setItem('user', user);
   },
 
-  getUser() {
-    return storage.getItem('user');
+  getUser(): User | null {
+    return storage.getItem<User>('user');
   },
 };
 
 // Run storage
 export const runStorage = {
-  saveRuns(runs: any[]) {
+  saveRuns<T>(runs: T[]) {
     storage.setItem('apsf:runs', runs);
   },
 
   getRuns() {
-    return storage.getItem<any[]>('apsf:runs') || [];
+    return storage.getItem<unknown[]>('apsf:runs') || [];
   },
 
-  saveRunDetail(runId: string, run: any) {
+  saveRunDetail<T>(runId: string, run: T) {
     storage.setItem(`apsf:run:${runId}`, run);
   },
 
   getRunDetail(runId: string) {
-    return storage.getItem<any>(`apsf:run:${runId}`);
+    return storage.getItem<unknown>(`apsf:run:${runId}`);
   },
 
   clearRuns() {
     storage.removeItem('apsf:runs');
   },
 
-  saveRunPreferences(prefs: any) {
+  saveRunPreferences<T>(prefs: T) {
     storage.setItem('runPreferences', prefs);
   },
 
