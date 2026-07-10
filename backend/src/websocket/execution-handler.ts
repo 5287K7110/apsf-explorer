@@ -2,8 +2,8 @@ import WebSocket from 'ws';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
 import { APSFRunBridge } from '../services/apsf-run-bridge.service.js';
 import { executionEvents } from '../services/event-bus.js';
-import { ExecuteRequest, StreamEvent } from '../types/index.js';
-import { ExecutionMode } from '../types/execution-mode.js';
+import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
+import { type ExecutionMode } from '../types/execution-mode.js';
 
 /**
  * WebSocket ハンドラー: リアルタイム実行進捗配信

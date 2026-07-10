@@ -1,17 +1,18 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ExecuteRequest } from '../types/index.js';
-import { PhaseDetector, resolveRunDir, PhaseInfo } from './apsf-native/phase-detector.js';
+import { type ExecuteRequest } from '../types/index.js';
+import { PhaseDetector, resolveRunDir, type PhaseInfo } from './apsf-native/phase-detector.js';
 import { startRun } from './apsf-native/run-store.js';
-import { writePhase as nativeWritePhase } from './apsf-native/write-phase.js';
-import { applyJudgeDecision, JudgeDecisionResult } from './apsf-native/judge-decision.js';
+import { writePhase as nativeWritePhase, resolveWriteTarget } from './apsf-native/write-phase.js';
+import { isHumanPhase } from './apsf-native/phases.js';
+import { applyJudgeDecision, type JudgeDecisionResult } from './apsf-native/judge-decision.js';
 import { loadRunState } from './apsf-native/run-state.js';
 import {
   listTranscripts,
   readTranscript,
-  TranscriptMeta,
-  TranscriptEvent,
+  type TranscriptMeta,
+  type TranscriptEvent,
 } from './apsf-native/execution-transcript.js';
 import {
   enqueue,
@@ -37,6 +38,22 @@ import {
  */
 /** run 名の許容形式（YYYY-MM-DD(-NNN)_case_topic）— パス片として使うため厳格に検証 */
 export const RUN_NAME_RE = /^\d{4}-\d{2}-\d{2}(-\d{3})?_[A-Za-z0-9._-]+$/;
+
+/**
+ * 呼び出し側が意図したファイルと現 phase の書き込み先が食い違った（HTTP 409 相当）。
+ * 編集開始後に phase が進んだ場合、意図しないファイルへの保存を防ぐ。
+ */
+export class PhaseFileMismatchError extends Error {
+  readonly status = 409 as const;
+}
+
+/**
+ * auto-owned phase（Builder/Critic の担当ファイル）への手動書き込みには
+ * 明示的な allowAutoOwned フラグが必要（HTTP 403 相当）。
+ */
+export class AutoOwnedPhaseError extends Error {
+  readonly status = 403 as const;
+}
 
 /**
  * phase として読み書きを許可するファイル名（ホワイトリスト）。
@@ -185,7 +202,10 @@ export class APSFRunBridge extends EventEmitter {
 
   private assertRunName(runName: string): void {
     if (!RUN_NAME_RE.test(runName)) {
-      throw new Error(`Invalid run name: ${runName}`);
+      throw new Error(
+        `Invalid run name: ${runName}. ` +
+          'Expected format: YYYY-MM-DD_topic (e.g. 2026-07-10_fix-readme-typo).'
+      );
     }
   }
 
@@ -218,15 +238,46 @@ export class APSFRunBridge extends EventEmitter {
 
   /**
    * 現在フェーズの対象ファイルに内容を保存
+   *
+   * API 層ガード（core write-phase は Python parity のため無検証のまま）:
+   * - options.filename が現 phase の書き込み先と食い違えば PhaseFileMismatchError（409）
+   * - auto-owned phase への手動書き込みは allowAutoOwned 必須（AutoOwnedPhaseError, 403）
+   * - force / forceReason は上書き保護の解除としてそのまま core へ渡す
    */
   async writePhase(
     runName: string,
-    content: string
+    content: string,
+    options: {
+      filename?: string;
+      force?: boolean;
+      forceReason?: string;
+      allowAutoOwned?: boolean;
+    } = {}
   ): Promise<{ fileWritten: string; phase: string }> {
     this.assertRunName(runName);
     const runDir = resolveRunDir(this.apsfRoot, runName);
     if (!runDir) throw new Error(`Run not found: ${runName}`);
-    const result = nativeWritePhase(runDir, content);
+
+    const target = resolveWriteTarget(runDir);
+    if (target) {
+      if (options.filename && options.filename !== target.file) {
+        throw new PhaseFileMismatchError(
+          `Phase moved on: current phase ${target.phase} writes ${target.file}, ` +
+            `not ${options.filename}. Nothing saved — reload the run and retry.`
+        );
+      }
+      if (!isHumanPhase(target.phase) && !options.allowAutoOwned) {
+        throw new AutoOwnedPhaseError(
+          `${target.file} is owned by ${target.role} (auto phase ${target.phase}). ` +
+            'Set allowAutoOwned to write it manually.'
+        );
+      }
+    }
+
+    const result = nativeWritePhase(runDir, content, {
+      force: options.force,
+      forceReason: options.forceReason,
+    });
     return { fileWritten: result.fileWritten, phase: result.phaseAfter };
   }
 

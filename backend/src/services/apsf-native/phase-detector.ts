@@ -13,7 +13,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { ApsfPhase, PHASES, isValidTransition, isHumanPhase } from './phases.js';
+import { type ApsfPhase, PHASES, isValidTransition, isHumanPhase } from './phases.js';
 import { VENDORED_CONTENT_DIR } from './content-root.js';
 
 /** フェーズ検出で走査する既知ファイル（ワークフロー順） */

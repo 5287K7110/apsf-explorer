@@ -7,11 +7,11 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { PhaseDetector, PhaseInfo } from './phase-detector.js';
+import { PhaseDetector, type PhaseInfo } from './phase-detector.js';
 import {
   resolvePlannerSpecialist,
   resolveCriticSpecialist,
-  SpecialistSelection,
+  type SpecialistSelection,
 } from './specialist-registry.js';
 
 /** renderer.py _section の忠実移植 */
@@ -146,13 +146,19 @@ function readContextFiles(info: PhaseInfo, runDir: string): Record<string, strin
   return context;
 }
 
-function selectionNote(selection: SpecialistSelection): string {
+function selectionNote(
+  selection: SpecialistSelection,
+  frameworkRoot: string,
+  kind: 'P' | 'C'
+): string {
+  // 環境依存の絶対パスをプロンプトに埋め込まない（snapshot hash の
+  // マシン間再現性と、ローカルパスの漏洩防止のため相対 posix パスにする）
   const posixPath = selection.specialistPath
-    ? selection.specialistPath.replace(/\\/g, '/')
+    ? path.relative(frameworkRoot, selection.specialistPath).split(path.sep).join('/')
     : '(none)';
   return (
     `- Mode: ${selection.mode}\n` +
-    `- Selected ${selection.ptype.startsWith('C-') ? 'C' : 'P'}-TYPE: ${selection.ptype || '(none)'}\n` +
+    `- Selected ${kind}-TYPE: ${selection.ptype || '(none)'}\n` +
     `- Specialist Path: ${posixPath}\n` +
     `- Reason: ${selection.reason}\n`
   );
@@ -176,11 +182,7 @@ export function buildPhasePrompt(runDir: string, frameworkRoot: string): {
       const assignmentContent = get('execution-assignment.md');
       const goalContent = get('goal.md');
       const selection = resolvePlannerSpecialist(goalContent, assignmentContent, frameworkRoot);
-      const note =
-        `- Mode: ${selection.mode}\n` +
-        `- Selected P-TYPE: ${selection.ptype || '(none)'}\n` +
-        `- Specialist Path: ${selection.specialistPath ? selection.specialistPath.replace(/\\/g, '/') : '(none)'}\n` +
-        `- Reason: ${selection.reason}\n`;
+      const note = selectionNote(selection, frameworkRoot, 'P');
       return {
         phase: info.phase,
         prompt: renderPlanPrompt({
@@ -208,11 +210,7 @@ export function buildPhasePrompt(runDir: string, frameworkRoot: string): {
       // Light run fallback: goal.md がなければ task.md
       const goalContent = get('goal.md') || get('task.md');
       const selection = resolveCriticSpecialist(goalContent, assignmentContent, frameworkRoot);
-      const note =
-        `- Mode: ${selection.mode}\n` +
-        `- Selected C-TYPE: ${selection.ptype || '(none)'}\n` +
-        `- Specialist Path: ${selection.specialistPath ? selection.specialistPath.replace(/\\/g, '/') : '(none)'}\n` +
-        `- Reason: ${selection.reason}\n`;
+      const note = selectionNote(selection, frameworkRoot, 'C');
       return {
         phase: info.phase,
         prompt: renderReviewPrompt({

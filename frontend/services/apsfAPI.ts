@@ -97,11 +97,15 @@ export const apsfAPI = {
     );
   },
 
-  /** 現在フェーズの対象ファイルに保存（human フェーズの記入） */
-  writePhase(runId: string, content: string) {
+  /**
+   * 現在フェーズの対象ファイルに保存（human フェーズの記入）。
+   * filename を渡すと、編集開始後に phase が進んでいた場合に
+   * サーバー側が 409 を返し、意図しないファイルへの保存を防ぐ。
+   */
+  writePhase(runId: string, content: string, filename?: string) {
     return apiClient.post<{ runId: string; fileWritten: string; phase: string }>(
       `/runs/apsf/${encodeURIComponent(runId)}/write-phase`,
-      { content }
+      filename ? { content, filename } : { content }
     );
   },
 

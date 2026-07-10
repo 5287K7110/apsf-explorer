@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { ExecuteRequest, StreamEvent } from '../types/index.js';
+import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
 import { NativeApsfExecutor } from './apsf-native/native-executor.js';
 
 /**

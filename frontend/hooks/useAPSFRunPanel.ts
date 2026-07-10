@@ -323,7 +323,12 @@ export function useAPSFRunPanel() {
     if (!selected || saving || !editorContent.trim()) return;
     setSaving(true);
     try {
-      const res = await apsfAPI.writePhase(selected, editorContent);
+      // fileToWrite を添えて保存 — 編集中に phase が進んでいたら 409 で保存されない
+      const res = await apsfAPI.writePhase(
+        selected,
+        editorContent,
+        fileToWrite && fileToWrite !== '(none)' ? fileToWrite : undefined
+      );
       appendLog('info', `保存: ${res.fileWritten} → phase=${res.phase}`);
       setShowEditor(false);
       detectPhase(selected);

@@ -371,6 +371,8 @@ function testPromptHash(): void {
     check(buildPrompt.phase === 'BUILD_NEEDED', `prompt phase: BUILD_NEEDED`);
     check(buildPrompt.prompt.length > 100, `prompt length: ${buildPrompt.prompt.length} chars`);
 
+    // 全文 fixture — hash 不一致時に「何が」違うのか diff で特定できるようにする
+    checkSnapshot('prompt-build.txt', buildPrompt.prompt, 'BUILD prompt text');
     const buildHash = sha256(normalizeContent(buildPrompt.prompt));
     checkSnapshot('prompt-build-hash.txt', buildHash, 'BUILD prompt hash');
 
@@ -379,6 +381,7 @@ function testPromptHash(): void {
     const reviewPrompt = buildPhasePrompt(runDir, frameworkRoot);
     check(reviewPrompt.phase === 'REVIEW_NEEDED', `prompt phase: REVIEW_NEEDED`);
 
+    checkSnapshot('prompt-review.txt', reviewPrompt.prompt, 'REVIEW prompt text');
     const reviewHash = sha256(normalizeContent(reviewPrompt.prompt));
     checkSnapshot('prompt-review-hash.txt', reviewHash, 'REVIEW prompt hash');
   } finally {

@@ -2,8 +2,8 @@ import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ExecuteRequest, StreamEvent } from '../types/index.js';
-import { ExecutionModeConfig } from '../types/execution-mode.js';
+import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
+import { type ExecutionModeConfig } from '../types/execution-mode.js';
 
 /**
  * CLI Full Executor
@@ -171,7 +171,7 @@ export class CLIFullExecutor extends EventEmitter {
     artifacts.forEach((artifact, i) => {
       content += `### Artifact ${i + 1}\n`;
       content += `ID: ${artifact.id}\n`;
-      content += `Time: ${new Date(artifact.timestamp).toISOString()}\n\n`;
+      content += `Time: ${new Date(artifact.timestamp as string | number).toISOString()}\n\n`;
     });
 
     content += '## Full Output\n\n';

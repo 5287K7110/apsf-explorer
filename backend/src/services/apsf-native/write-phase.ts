@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { PhaseDetector } from './phase-detector.js';
-import { ApsfPhase } from './phases.js';
+import { type ApsfPhase } from './phases.js';
 import { transition, loadRunState, atomicWrite, appendSessionEvent } from './run-state.js';
 
 /** phase → (owner, 対象ファイル)（main.py phase_target_map） */
@@ -215,6 +215,19 @@ export interface WritePhaseResult {
   phaseAfter: string;
 }
 
+/**
+ * 現在 phase の書き込み先を解決する（API 層の事前検証用）。
+ * 書き込み可能なターゲットがない phase では null を返す。
+ */
+export function resolveWriteTarget(
+  runDir: string
+): { phase: string; role: string; file: string } | null {
+  const info = new PhaseDetector(runDir).detect();
+  const target = PHASE_TARGET[info.phase];
+  if (!target || target.file === '(none)') return null;
+  return { phase: info.phase, role: target.role, file: target.file };
+}
+
 export function writePhase(
   runDir: string,
   rawContent: string,
@@ -235,7 +248,8 @@ export function writePhase(
   const content = sanitizePhaseInput(rawContent);
   if (!PhaseDetector.isMeaningfulText(content)) {
     throw new Error(
-      `Content for ${target.file} is empty or template-only. Nothing saved.`
+      `Content for ${target.file} is empty or template-only ` +
+        '(more than 3 non-heading, non-empty lines are required). Nothing saved.'
     );
   }
 

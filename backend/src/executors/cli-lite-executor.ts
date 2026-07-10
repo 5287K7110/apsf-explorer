@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { ExecuteRequest, StreamEvent } from '../types/index.js';
-import { ExecutionModeConfig } from '../types/execution-mode.js';
+import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
+import { type ExecutionModeConfig } from '../types/execution-mode.js';
 
 /**
  * CLI Lite Executor

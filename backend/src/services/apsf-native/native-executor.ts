@@ -17,13 +17,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { PhaseDetector, resolveRunDir } from './phase-detector.js';
-import { isHumanPhase, AUTO_OWNED_PHASES, ApsfPhase } from './phases.js';
+import { isHumanPhase, AUTO_OWNED_PHASES, type ApsfPhase } from './phases.js';
 import { buildPhasePrompt } from './prompt-builder.js';
 import { writePhase, nextPhaseAfterWrite } from './write-phase.js';
 import { transition, atomicWrite, setPhaseStatus } from './run-state.js';
 import { TranscriptWriter } from './execution-transcript.js';
 import { resolveFrameworkRoot } from './content-root.js';
-import { StreamEvent } from '../../types/index.js';
+import { type StreamEvent } from '../../types/index.js';
 
 export interface NativeExecuteOptions {
   runId: string;

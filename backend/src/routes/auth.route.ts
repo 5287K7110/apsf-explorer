@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { verifyUser } from '../services/users-store.js';

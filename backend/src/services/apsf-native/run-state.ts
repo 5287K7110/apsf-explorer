@@ -11,7 +11,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { ApsfPhase, isValidTransition } from './phases.js';
+import { type ApsfPhase, isValidTransition } from './phases.js';
 
 // ── Atomic write（temp + exclusive .lock + rename）──────────────
 

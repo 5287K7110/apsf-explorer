@@ -1,11 +1,15 @@
-import { Router, Request, Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { execSync } from 'child_process';
-import { APSFRunBridge } from '../services/apsf-run-bridge.service.js';
+import {
+  APSFRunBridge,
+  PhaseFileMismatchError,
+  AutoOwnedPhaseError,
+} from '../services/apsf-run-bridge.service.js';
 import { ExecutionModeRouter } from '../services/execution-mode-router.js';
 import { executionEvents } from '../services/event-bus.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
-import { ExecuteRequest, StreamEvent } from '../types/index.js';
-import { ExecutionMode } from '../types/execution-mode.js';
+import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
+import { type ExecutionMode } from '../types/execution-mode.js';
 
 const router = Router();
 const apsfRun = new APSFRunBridge();
@@ -180,15 +184,24 @@ router.post('/apsf/:id/write-phase', async (req: Request, res: Response) => {
       res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
       return;
     }
-    const { content } = req.body || {};
+    const { content, filename, force, forceReason, allowAutoOwned } = req.body || {};
     if (!content || typeof content !== 'string') {
       res.status(400).json({ error: 'content (string) is required' });
       return;
     }
-    const result = await apsfRun.writePhase(req.params.id, content);
+    const result = await apsfRun.writePhase(req.params.id, content, {
+      filename: typeof filename === 'string' ? filename : undefined,
+      force: Boolean(force),
+      forceReason: typeof forceReason === 'string' ? forceReason : undefined,
+      allowAutoOwned: Boolean(allowAutoOwned),
+    });
     res.json({ runId: req.params.id, ...result });
   } catch (error) {
-    res.status(400).json({
+    const status =
+      error instanceof PhaseFileMismatchError || error instanceof AutoOwnedPhaseError
+        ? error.status
+        : 400;
+    res.status(status).json({
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }
