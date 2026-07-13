@@ -1,5 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import WebSocket, { WebSocketServer } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
@@ -68,6 +71,24 @@ app.use('/api/runs', runsRoute);
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// ── 単一プロセス運用: ビルド済みフロントエンド (<repo>/dist) の配信 ──
+// `npm run build:app`（repo ルート）で dist を作った後は、vite dev サーバー
+// なしで backend 単体で完結する。dist がなければ何もしない（従来どおり）。
+const distDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'dist'
+);
+if (fs.existsSync(path.join(distDir, 'index.html'))) {
+  app.use(express.static(distDir));
+  // SPA fallback（/api・/ws・/health 以外は index.html を返す）
+  app.get(/^\/(?!api\/|ws$|health$).*/, (_req, res) => {
+    res.sendFile(path.join(distDir, 'index.html'));
+  });
+  console.log(`🖥️  Serving built frontend from ${distDir} — open http://localhost:${process.env.PORT || 3001}`);
+}
 
 // WebSocket
 console.log('🔧 WebSocket Server initialized');

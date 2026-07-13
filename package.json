@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:app": "vite build",
+    "app": "vite build && npm --prefix backend run dev",
     "preview": "vite preview",
     "lint": "eslint frontend --ext ts,tsx",
     "test": "vitest",
