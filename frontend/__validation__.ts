@@ -1,11 +1,8 @@
 // Import validation - ensures all Phase 1-2 files are accessible and have no circular dependencies
 
 // Type imports (intentionally imported to validate they exist and resolve correctly)
-// @ts-expect-error - Importing types for validation purposes
 import type { User, LoginRequest, LoginResponse, AuthState } from './types/auth';
-// @ts-expect-error - Importing types for validation purposes
 import type { RoleType, Role, SelectedRoles, RoleState } from './types/roles';
-// @ts-expect-error - Importing types for validation purposes
 import type { APIRequest, APIResponse, WSMessage, WSRunUpdate, WSRunComplete, WSEvent } from './types/api';
 
 // Utility imports

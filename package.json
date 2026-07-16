@@ -15,7 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest --watch",
     "test:integration": "tsx scripts/run-frontend-integration-tests.ts",
-    "test:integration:watch": "vitest run frontend/__tests__/integration/frontend-integration.test.ts",
+    "test:integration:watch": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "tsx e2e-test.ts"
   },
   "dependencies": {

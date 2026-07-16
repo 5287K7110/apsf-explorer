@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 // Error component for testing
-function ErrorComponent() {
+function ErrorComponent(): React.ReactElement {
   throw new Error('Test error');
 }
 
@@ -23,7 +23,7 @@ describe('ErrorBoundary Component', () => {
     );
 
     // Error boundary should display error UI
-    expect(screen.getByText(/error|went wrong/i)).toBeInTheDocument();
+    expect(screen.getByText(/went wrong/i)).toBeInTheDocument();
 
     consoleSpy.mockRestore();
   });

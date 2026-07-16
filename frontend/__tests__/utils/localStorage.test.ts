@@ -71,14 +71,14 @@ describe('storage utilities', () => {
     });
 
     it('should save and get user', () => {
-      const user = { id: '1', email: 'test@example.com', name: 'Test User' };
+      const user = { id: '1', email: 'test@example.com', name: 'Test User', role: 'user' as const };
       authStorage.saveUser(user);
       expect(authStorage.getUser()).toEqual(user);
     });
 
     it('should clear auth on logout', () => {
       authStorage.saveToken('token', 'refresh');
-      authStorage.saveUser({ id: '1' });
+      authStorage.saveUser({ id: '1', email: 'a@b.c', name: 'A', role: 'user' as const });
       authStorage.clearAuth();
 
       expect(authStorage.getToken()).toBeNull();

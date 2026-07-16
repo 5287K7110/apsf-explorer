@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useAuth } from '../../hooks/useAuth';
 import * as authAPI from '../../services/authAPI';
 import { authStorage } from '../../utils/localStorage';
+import { useAuthStore } from '../../store/authStore';
 
 // Mock authAPI
 vi.mock('../../services/authAPI', () => ({
@@ -15,9 +16,13 @@ vi.mock('../../services/authAPI', () => ({
 }));
 
 describe('useAuth hook', () => {
+  const initialAuthState = useAuthStore.getState();
+
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    // authStore はシングルトンのため、前のテストのログイン状態が漏れる
+    useAuthStore.setState(initialAuthState, true);
   });
 
   it('should initialize with null values', () => {

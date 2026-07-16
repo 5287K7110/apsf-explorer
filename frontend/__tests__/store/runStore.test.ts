@@ -1,44 +1,44 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useRunStore } from '../../store/runStore';
 
+// store はモジュールシングルトンのため、テスト間で state が漏れる。
+// import 直後のスナップショットに毎回巻き戻して独立性を保証する。
+const initialRunStoreState = useRunStore.getState();
+
 describe('useRunStore', () => {
   beforeEach(() => {
     localStorage.clear();
+    useRunStore.setState(initialRunStoreState, true);
   });
 
   it('should initialize with runs', () => {
-    const store = useRunStore();
-    expect(Array.isArray(store.runs)).toBe(true);
-    expect(store.runs.length).toBeGreaterThan(0);
+    expect(Array.isArray(useRunStore.getState().runs)).toBe(true);
+    expect(useRunStore.getState().runs.length).toBeGreaterThan(0);
   });
 
   it('should initialize with default sidebar open', () => {
-    const store = useRunStore();
-    expect(store.sidebarOpen).toBe(true);
+    expect(useRunStore.getState().sidebarOpen).toBe(true);
   });
 
   it('should initialize disconnected', () => {
-    const store = useRunStore();
-    expect(store.connectionStatus).toBe('disconnected');
+    expect(useRunStore.getState().connectionStatus).toBe('disconnected');
   });
 
   describe('setRuns', () => {
     it('should set runs', () => {
-      const store = useRunStore();
       const newRuns = [
         { id: '1', name: 'Run 1', status: 'pending' } as any,
         { id: '2', name: 'Run 2', status: 'running' } as any,
       ];
 
-      store.setRuns(newRuns);
-      expect(store.runs).toEqual(newRuns);
+      useRunStore.getState().setRuns(newRuns);
+      expect(useRunStore.getState().runs).toEqual(newRuns);
     });
 
     it('should persist runs to localStorage', () => {
-      const store = useRunStore();
       const newRuns = [{ id: '1', name: 'Run 1' } as any];
 
-      store.setRuns(newRuns);
+      useRunStore.getState().setRuns(newRuns);
       const saved = localStorage.getItem('apsf:runs');
       expect(saved).toBeDefined();
     });
@@ -46,21 +46,19 @@ describe('useRunStore', () => {
 
   describe('addRun', () => {
     it('should add run to beginning of list', () => {
-      const store = useRunStore();
-      const initialCount = store.runs.length;
+      const initialCount = useRunStore.getState().runs.length;
       const newRun = { id: 'new-run', name: 'New Run', status: 'pending' } as any;
 
-      store.addRun(newRun);
+      useRunStore.getState().addRun(newRun);
 
-      expect(store.runs).toHaveLength(initialCount + 1);
-      expect(store.runs[0]).toEqual(newRun);
+      expect(useRunStore.getState().runs).toHaveLength(initialCount + 1);
+      expect(useRunStore.getState().runs[0]).toEqual(newRun);
     });
 
     it('should persist added run', () => {
-      const store = useRunStore();
       const newRun = { id: 'new-run', name: 'New' } as any;
 
-      store.addRun(newRun);
+      useRunStore.getState().addRun(newRun);
 
       const saved = localStorage.getItem('apsf:runs');
       expect(saved).toBeDefined();
@@ -71,215 +69,194 @@ describe('useRunStore', () => {
 
   describe('updateRun', () => {
     it('should update run properties', () => {
-      const store = useRunStore();
-      const firstRunId = store.runs[0].id;
+      const firstRunId = useRunStore.getState().runs[0].id;
 
-      store.updateRun(firstRunId, { status: 'success' });
+      useRunStore.getState().updateRun(firstRunId, { status: 'success' });
 
-      const updated = store.runs.find((r) => r.id === firstRunId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === firstRunId);
       expect(updated?.status).toBe('success');
     });
 
     it('should persist run update', () => {
-      const store = useRunStore();
-      const firstRunId = store.runs[0].id;
+      const firstRunId = useRunStore.getState().runs[0].id;
 
-      store.updateRun(firstRunId, { status: 'failed' });
+      useRunStore.getState().updateRun(firstRunId, { status: 'failed' });
 
       const detail = localStorage.getItem(`apsf:run:${firstRunId}`);
       expect(detail).toBeDefined();
     });
 
     it('should handle partial updates', () => {
-      const store = useRunStore();
-      const run = store.runs[0];
-      const originalName = run.name;
+      const run = useRunStore.getState().runs[0];
+      const originalDomain = run.domain;
 
-      store.updateRun(run.id, { status: 'completed' });
+      useRunStore.getState().updateRun(run.id, { status: 'success' });
 
-      const updated = store.runs.find((r) => r.id === run.id);
-      expect(updated?.name).toBe(originalName);
-      expect(updated?.status).toBe('completed');
+      const updated = useRunStore.getState().runs.find((r) => r.id === run.id);
+      expect(updated?.domain).toBe(originalDomain);
+      expect(updated?.status).toBe('success');
     });
   });
 
   describe('setActiveRunId', () => {
     it('should set active run id', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.setActiveRunId(runId);
+      useRunStore.getState().setActiveRunId(runId);
 
-      expect(store.activeRunId).toBe(runId);
+      expect(useRunStore.getState().activeRunId).toBe(runId);
     });
 
     it('should set active run id to null', () => {
-      const store = useRunStore();
-      store.setActiveRunId(null);
+      useRunStore.getState().setActiveRunId(null);
 
-      expect(store.activeRunId).toBeNull();
+      expect(useRunStore.getState().activeRunId).toBeNull();
     });
   });
 
   describe('setSelectedRunId', () => {
     it('should set selected run id', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.setSelectedRunId(runId);
+      useRunStore.getState().setSelectedRunId(runId);
 
-      expect(store.selectedRunId).toBe(runId);
+      expect(useRunStore.getState().selectedRunId).toBe(runId);
     });
 
     it('should persist selected run id', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.setSelectedRunId(runId);
+      useRunStore.getState().setSelectedRunId(runId);
 
-      expect(localStorage.getItem('selectedRunId')).toBe(runId);
+      expect(localStorage.getItem('selectedRunId')).toBe(JSON.stringify(runId));
     });
   });
 
   describe('setFilter', () => {
     it('should set filter', () => {
-      const store = useRunStore();
 
-      store.setFilter({ status: 'success' });
+      useRunStore.getState().setFilter({ status: 'success' });
 
-      expect(store.filter.status).toBe('success');
+      expect(useRunStore.getState().filter.status).toBe('success');
     });
 
     it('should merge filters', () => {
-      const store = useRunStore();
 
-      store.setFilter({ status: 'success' });
-      store.setFilter({ domain: 'test' });
+      useRunStore.getState().setFilter({ status: 'success' });
+      useRunStore.getState().setFilter({ domain: 'test' });
 
-      expect(store.filter.status).toBe('success');
-      expect(store.filter.domain).toBe('test');
+      expect(useRunStore.getState().filter.status).toBe('success');
+      expect(useRunStore.getState().filter.domain).toBe('test');
     });
   });
 
   describe('setSidebarOpen', () => {
     it('should toggle sidebar', () => {
-      const store = useRunStore();
 
-      store.setSidebarOpen(false);
-      expect(store.sidebarOpen).toBe(false);
+      useRunStore.getState().setSidebarOpen(false);
+      expect(useRunStore.getState().sidebarOpen).toBe(false);
 
-      store.setSidebarOpen(true);
-      expect(store.sidebarOpen).toBe(true);
+      useRunStore.getState().setSidebarOpen(true);
+      expect(useRunStore.getState().sidebarOpen).toBe(true);
     });
   });
 
   describe('togglePhaseExpanded', () => {
     it('should add phase to expanded', () => {
-      const store = useRunStore();
 
-      store.togglePhaseExpanded('phase-1');
+      useRunStore.getState().togglePhaseExpanded('phase-1');
 
-      expect(store.expandedPhases.has('phase-1')).toBe(true);
+      expect(useRunStore.getState().expandedPhases.has('phase-1')).toBe(true);
     });
 
     it('should remove phase from expanded', () => {
-      const store = useRunStore();
 
-      store.togglePhaseExpanded('phase-1');
-      store.togglePhaseExpanded('phase-1');
+      useRunStore.getState().togglePhaseExpanded('phase-1');
+      useRunStore.getState().togglePhaseExpanded('phase-1');
 
-      expect(store.expandedPhases.has('phase-1')).toBe(false);
+      expect(useRunStore.getState().expandedPhases.has('phase-1')).toBe(false);
     });
 
     it('should handle multiple phases', () => {
-      const store = useRunStore();
 
-      store.togglePhaseExpanded('phase-1');
-      store.togglePhaseExpanded('phase-2');
+      useRunStore.getState().togglePhaseExpanded('phase-1');
+      useRunStore.getState().togglePhaseExpanded('phase-2');
 
-      expect(store.expandedPhases.has('phase-1')).toBe(true);
-      expect(store.expandedPhases.has('phase-2')).toBe(true);
+      expect(useRunStore.getState().expandedPhases.has('phase-1')).toBe(true);
+      expect(useRunStore.getState().expandedPhases.has('phase-2')).toBe(true);
     });
   });
 
   describe('setExpandedLogs', () => {
     it('should set expanded logs', () => {
-      const store = useRunStore();
 
-      store.setExpandedLogs(true);
-      expect(store.expandedLogs).toBe(true);
+      useRunStore.getState().setExpandedLogs(true);
+      expect(useRunStore.getState().expandedLogs).toBe(true);
 
-      store.setExpandedLogs(false);
-      expect(store.expandedLogs).toBe(false);
+      useRunStore.getState().setExpandedLogs(false);
+      expect(useRunStore.getState().expandedLogs).toBe(false);
     });
   });
 
   describe('setConnectionStatus', () => {
     it('should set connection status', () => {
-      const store = useRunStore();
 
-      store.setConnectionStatus('connected');
-      expect(store.connectionStatus).toBe('connected');
+      useRunStore.getState().setConnectionStatus('connected');
+      expect(useRunStore.getState().connectionStatus).toBe('connected');
 
-      store.setConnectionStatus('error');
-      expect(store.connectionStatus).toBe('error');
+      useRunStore.getState().setConnectionStatus('error');
+      expect(useRunStore.getState().connectionStatus).toBe('error');
     });
   });
 
   describe('getActiveRun', () => {
     it('should return active run', () => {
-      const store = useRunStore();
-      const activeRun = store.getActiveRun();
+      const activeRun = useRunStore.getState().getActiveRun();
 
       expect(activeRun).not.toBeNull();
-      expect(activeRun?.id).toBe(store.activeRunId);
+      expect(activeRun?.id).toBe(useRunStore.getState().activeRunId);
     });
 
     it('should return null if no active run', () => {
-      const store = useRunStore();
-      store.setActiveRunId('non-existent');
+      useRunStore.getState().setActiveRunId('non-existent');
 
-      const activeRun = store.getActiveRun();
+      const activeRun = useRunStore.getState().getActiveRun();
       expect(activeRun).toBeNull();
     });
   });
 
   describe('getSelectedRun', () => {
     it('should return selected run', () => {
-      const store = useRunStore();
-      const selectedRun = store.getSelectedRun();
+      const selectedRun = useRunStore.getState().getSelectedRun();
 
       expect(selectedRun).not.toBeNull();
-      expect(selectedRun?.id).toBe(store.selectedRunId);
+      expect(selectedRun?.id).toBe(useRunStore.getState().selectedRunId);
     });
   });
 
   describe('getFilteredRuns', () => {
     it('should return all runs when no filter', () => {
-      const store = useRunStore();
-      const filtered = store.getFilteredRuns();
+      const filtered = useRunStore.getState().getFilteredRuns();
 
-      expect(filtered.length).toBe(store.runs.length);
+      expect(filtered.length).toBe(useRunStore.getState().runs.length);
     });
 
     it('should filter by status', () => {
-      const store = useRunStore();
-      store.runs[0].status = 'success';
-      store.runs[1].status = 'failed';
+      useRunStore.getState().runs[0].status = 'success';
+      useRunStore.getState().runs[1].status = 'failed';
 
-      store.setFilter({ status: 'success' });
-      const filtered = store.getFilteredRuns();
+      useRunStore.getState().setFilter({ status: 'success' });
+      const filtered = useRunStore.getState().getFilteredRuns();
 
       expect(filtered.every((r) => r.status === 'success')).toBe(true);
     });
 
     it('should filter by domain', () => {
-      const store = useRunStore();
-      store.runs[0].domain = 'shopping';
-      store.runs[1].domain = 'email';
+      useRunStore.getState().runs[0].domain = 'shopping';
+      useRunStore.getState().runs[1].domain = 'email';
 
-      store.setFilter({ domain: 'shop' });
-      const filtered = store.getFilteredRuns();
+      useRunStore.getState().setFilter({ domain: 'shop' });
+      const filtered = useRunStore.getState().getFilteredRuns();
 
       expect(filtered.some((r) => r.domain.includes('shop'))).toBe(true);
     });
@@ -287,82 +264,75 @@ describe('useRunStore', () => {
 
   describe('updateRunPhase', () => {
     it('should update phase and progress', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.updateRunPhase(runId, 'building', 50);
+      useRunStore.getState().updateRunPhase(runId, 'building', 50);
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.currentPhase).toBe('building');
       expect(updated?.progress).toBe(50);
     });
 
     it('should mark as running when not complete', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.updateRunPhase(runId, 'building', 50);
+      useRunStore.getState().updateRunPhase(runId, 'building', 50);
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.status).toBe('running');
     });
 
     it('should mark as success when complete', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.updateRunPhase(runId, 'complete', 100);
+      useRunStore.getState().updateRunPhase(runId, 'complete', 100);
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.status).toBe('success');
     });
   });
 
   describe('updateRunAC', () => {
     it('should update AC progress', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.updateRunAC(runId, 75);
+      useRunStore.getState().updateRunAC(runId, 75);
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.acProgress).toBe(75);
     });
   });
 
   describe('markRunSuccess', () => {
     it('should mark run as success', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.markRunSuccess(runId);
+      useRunStore.getState().markRunSuccess(runId);
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.status).toBe('success');
       expect(updated?.progress).toBe(100);
       expect(updated?.acProgress).toBe(100);
     });
 
     it('should set completion timestamp', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
       const before = Date.now();
 
-      store.markRunSuccess(runId);
+      useRunStore.getState().markRunSuccess(runId);
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.completedAt).toBeGreaterThanOrEqual(before);
     });
   });
 
   describe('markRunFailed', () => {
     it('should mark run as failed', () => {
-      const store = useRunStore();
-      const runId = store.runs[0].id;
+      const runId = useRunStore.getState().runs[0].id;
 
-      store.markRunFailed(runId, 'Build failed');
+      useRunStore.getState().markRunFailed(runId, 'Build failed');
 
-      const updated = store.runs.find((r) => r.id === runId);
+      const updated = useRunStore.getState().runs.find((r) => r.id === runId);
       expect(updated?.status).toBe('failed');
       expect(updated?.lastError?.message).toBe('Build failed');
     });

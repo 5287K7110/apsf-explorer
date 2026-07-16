@@ -26,7 +26,7 @@ describe('authAPI', () => {
       const mockResponse = {
         token: 'jwt-token',
         refreshToken: 'refresh-token',
-        user: { id: '1', email: 'test@example.com', name: 'Test User' },
+        user: { id: '1', email: 'test@example.com', name: 'Test User', role: 'user' as const },
       };
 
       vi.mocked(apiClientModule.apiClient.post).mockResolvedValueOnce(mockResponse as any);
@@ -44,7 +44,7 @@ describe('authAPI', () => {
       const mockResponse = {
         token: 'jwt-token',
         refreshToken: 'refresh-token',
-        user: { id: '1', email: 'test@example.com', name: 'Test User' },
+        user: { id: '1', email: 'test@example.com', name: 'Test User', role: 'user' as const },
       };
 
       vi.mocked(apiClientModule.apiClient.post).mockResolvedValueOnce(mockResponse as any);
@@ -60,7 +60,7 @@ describe('authAPI', () => {
       const mockResponse = {
         token: 'jwt-token',
         refreshToken: 'refresh-token',
-        user: { id: '1' },
+        user: { id: '1', email: 'test@example.com', name: 'Test User', role: 'user' as const },
       };
 
       vi.mocked(apiClientModule.apiClient.post).mockResolvedValueOnce(mockResponse as any);
@@ -97,7 +97,7 @@ describe('authAPI', () => {
 
     it('should clear auth storage', async () => {
       authStorage.saveToken('token', 'refresh');
-      authStorage.saveUser({ id: '1' });
+      authStorage.saveUser({ id: '1', email: 'test@example.com', name: 'Test User', role: 'user' as const });
 
       vi.mocked(apiClientModule.apiClient.post).mockResolvedValueOnce(undefined);
 
@@ -139,7 +139,7 @@ describe('authAPI', () => {
       const mockResponse = {
         token: 'jwt-token',
         refreshToken: 'refresh-token',
-        user: { id: '1', email: 'new@example.com', name: 'New User' },
+        user: { id: '1', email: 'new@example.com', name: 'New User', role: 'user' as const },
       };
 
       vi.mocked(apiClientModule.apiClient.post).mockResolvedValueOnce(mockResponse as any);
@@ -157,7 +157,7 @@ describe('authAPI', () => {
       const mockResponse = {
         token: 'jwt-token',
         refreshToken: 'refresh-token',
-        user: { id: '1', email: 'new@example.com', name: 'New User' },
+        user: { id: '1', email: 'new@example.com', name: 'New User', role: 'user' as const },
       };
 
       vi.mocked(apiClientModule.apiClient.post).mockResolvedValueOnce(mockResponse as any);
@@ -322,7 +322,7 @@ describe('authAPI', () => {
 
   describe('getStoredUser', () => {
     it('should return stored user', () => {
-      const user = { id: '1', email: 'test@example.com', name: 'Test' };
+      const user = { id: '1', email: 'test@example.com', name: 'Test', role: 'user' as const };
       authStorage.saveUser(user);
 
       expect(authAPI.getStoredUser()).toEqual(user);

@@ -76,6 +76,7 @@ export function renderBuildPrompt(opts: {
     "Start immediately with '# Build'. Do not include meta-commentary, code fences around the document, or explanatory text before or after the Markdown.\n" +
     'If Build Review Feedback is provided, reflect it in the revised build while still returning the full final document.\n' +
     'Do not dump the full deliverable into build.md. Put real implementation in real files and use build.md as the build record.\n' +
+    'Do NOT create or edit a build.md file in the working directory yourself — return the build record as your response text only; the framework persists it into the run folder.\n' +
     'build.md must include: What was built, Inputs received, ' +
     'Decisions made, Deviations from Plan, Open Issues.\n';
   return prompt;

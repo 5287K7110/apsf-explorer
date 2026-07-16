@@ -40,6 +40,9 @@ jobs:
         env:
           JWT_SECRET: ci-test-secret
 
+      - name: Frontend unit tests (vitest)
+        run: npm run test:run
+
       - name: Frontend integration tests (real backend + real WS events)
         run: npx tsx scripts/run-frontend-integration-tests.ts
 

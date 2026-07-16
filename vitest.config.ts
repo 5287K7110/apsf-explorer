@@ -7,6 +7,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // この config は frontend unit テスト専用。
+    // - backend/__tests__ は node 環境前提（jsdom では動かない）— backend 側で実行する
+    // - integration テストは実 backend が必要（npm run test:integration で実行）
+    include: ['frontend/__tests__/**/*.{test,spec}.{ts,tsx}'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'frontend/__tests__/integration/**'],
     setupFiles: ['./frontend/__tests__/setup.ts'],
     testTimeout: 10000, // 10 seconds for integration tests
     hookTimeout: 10000,

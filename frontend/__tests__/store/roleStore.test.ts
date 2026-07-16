@@ -1,211 +1,195 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useRoleStore } from '../../store/roleStore';
 
+const initialRoleStoreState = useRoleStore.getState();
+
 describe('useRoleStore', () => {
   beforeEach(() => {
-    const store = useRoleStore();
-    store.clearSelection();
-    store.setError(null);
-    store.setLoading(false);
+    useRoleStore.setState(initialRoleStoreState, true);
+    useRoleStore.getState().clearSelection();
+    useRoleStore.getState().setError(null);
+    useRoleStore.getState().setLoading(false);
   });
 
   it('should initialize with all roles deselected', () => {
-    const store = useRoleStore();
 
-    expect(store.selectedRoles.builder).toBe(false);
-    expect(store.selectedRoles.critic).toBe(false);
-    expect(store.selectedRoles.judge).toBe(false);
-    expect(store.selectedRoles.planner).toBe(false);
+    expect(useRoleStore.getState().selectedRoles.builder).toBe(false);
+    expect(useRoleStore.getState().selectedRoles.critic).toBe(false);
+    expect(useRoleStore.getState().selectedRoles.judge).toBe(false);
+    expect(useRoleStore.getState().selectedRoles.planner).toBe(false);
   });
 
   it('should initialize with no available roles', () => {
-    const store = useRoleStore();
-    expect(store.availableRoles).toEqual([]);
+    expect(useRoleStore.getState().availableRoles).toEqual([]);
   });
 
   it('should initialize with loading false', () => {
-    const store = useRoleStore();
-    expect(store.loading).toBe(false);
+    expect(useRoleStore.getState().loading).toBe(false);
   });
 
   it('should initialize with no error', () => {
-    const store = useRoleStore();
-    expect(store.error).toBeNull();
+    expect(useRoleStore.getState().error).toBeNull();
   });
 
   describe('selectRole', () => {
     it('should select a role', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
+      useRoleStore.getState().selectRole('builder', true);
 
-      expect(store.selectedRoles.builder).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(true);
     });
 
     it('should deselect a role', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
-      store.selectRole('builder', false);
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('builder', false);
 
-      expect(store.selectedRoles.builder).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(false);
     });
 
     it('should allow multiple role selection', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
-      store.selectRole('critic', true);
-      store.selectRole('judge', true);
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('critic', true);
+      useRoleStore.getState().selectRole('judge', true);
 
-      expect(store.selectedRoles.builder).toBe(true);
-      expect(store.selectedRoles.critic).toBe(true);
-      expect(store.selectedRoles.judge).toBe(true);
-      expect(store.selectedRoles.planner).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.judge).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.planner).toBe(false);
     });
 
     it('should preserve other selections when selecting new role', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
-      store.selectRole('critic', true);
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('critic', true);
 
-      expect(store.selectedRoles.builder).toBe(true);
-      expect(store.selectedRoles.critic).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(true);
     });
 
     it('should preserve other selections when deselecting a role', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
-      store.selectRole('critic', true);
-      store.selectRole('builder', false);
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('critic', true);
+      useRoleStore.getState().selectRole('builder', false);
 
-      expect(store.selectedRoles.builder).toBe(false);
-      expect(store.selectedRoles.critic).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(true);
     });
 
     it('should handle all role types', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
-      store.selectRole('critic', true);
-      store.selectRole('judge', true);
-      store.selectRole('planner', true);
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('critic', true);
+      useRoleStore.getState().selectRole('judge', true);
+      useRoleStore.getState().selectRole('planner', true);
 
-      expect(store.selectedRoles.builder).toBe(true);
-      expect(store.selectedRoles.critic).toBe(true);
-      expect(store.selectedRoles.judge).toBe(true);
-      expect(store.selectedRoles.planner).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.judge).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.planner).toBe(true);
     });
   });
 
   describe('clearSelection', () => {
     it('should clear all selections', () => {
-      const store = useRoleStore();
 
-      store.selectRole('builder', true);
-      store.selectRole('critic', true);
-      store.clearSelection();
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('critic', true);
+      useRoleStore.getState().clearSelection();
 
-      expect(store.selectedRoles.builder).toBe(false);
-      expect(store.selectedRoles.critic).toBe(false);
-      expect(store.selectedRoles.judge).toBe(false);
-      expect(store.selectedRoles.planner).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.judge).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.planner).toBe(false);
     });
 
     it('should work even with no selections', () => {
-      const store = useRoleStore();
 
-      expect(() => store.clearSelection()).not.toThrow();
-      expect(store.selectedRoles.builder).toBe(false);
+      expect(() => useRoleStore.getState().clearSelection()).not.toThrow();
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(false);
     });
   });
 
   describe('setAvailableRoles', () => {
     it('should set available roles', () => {
-      const store = useRoleStore();
       const roles = [
         { id: '1', type: 'builder', name: 'Builder', description: 'Builds' } as any,
         { id: '2', type: 'critic', name: 'Critic', description: 'Critiques' } as any,
       ];
 
-      store.setAvailableRoles(roles);
+      useRoleStore.getState().setAvailableRoles(roles);
 
-      expect(store.availableRoles).toEqual(roles);
+      expect(useRoleStore.getState().availableRoles).toEqual(roles);
     });
 
     it('should update available roles', () => {
-      const store = useRoleStore();
       const roles1 = [{ id: '1', type: 'builder', name: 'Builder' } as any];
       const roles2 = [
         { id: '1', type: 'builder', name: 'Builder' } as any,
         { id: '2', type: 'critic', name: 'Critic' } as any,
       ];
 
-      store.setAvailableRoles(roles1);
-      expect(store.availableRoles).toHaveLength(1);
+      useRoleStore.getState().setAvailableRoles(roles1);
+      expect(useRoleStore.getState().availableRoles).toHaveLength(1);
 
-      store.setAvailableRoles(roles2);
-      expect(store.availableRoles).toHaveLength(2);
+      useRoleStore.getState().setAvailableRoles(roles2);
+      expect(useRoleStore.getState().availableRoles).toHaveLength(2);
     });
   });
 
   describe('setLoading', () => {
     it('should set loading state', () => {
-      const store = useRoleStore();
 
-      store.setLoading(true);
-      expect(store.loading).toBe(true);
+      useRoleStore.getState().setLoading(true);
+      expect(useRoleStore.getState().loading).toBe(true);
 
-      store.setLoading(false);
-      expect(store.loading).toBe(false);
+      useRoleStore.getState().setLoading(false);
+      expect(useRoleStore.getState().loading).toBe(false);
     });
   });
 
   describe('setError', () => {
     it('should set error message', () => {
-      const store = useRoleStore();
 
-      store.setError('Test error');
-      expect(store.error).toBe('Test error');
+      useRoleStore.getState().setError('Test error');
+      expect(useRoleStore.getState().error).toBe('Test error');
     });
 
     it('should clear error', () => {
-      const store = useRoleStore();
 
-      store.setError('Test error');
-      store.setError(null);
-      expect(store.error).toBeNull();
+      useRoleStore.getState().setError('Test error');
+      useRoleStore.getState().setError(null);
+      expect(useRoleStore.getState().error).toBeNull();
     });
   });
 
   describe('combined operations', () => {
     it('should handle complete workflow', () => {
-      const store = useRoleStore();
 
-      store.setLoading(true);
-      expect(store.loading).toBe(true);
+      useRoleStore.getState().setLoading(true);
+      expect(useRoleStore.getState().loading).toBe(true);
 
       const roles = [
         { id: '1', type: 'builder', name: 'Builder' } as any,
         { id: '2', type: 'critic', name: 'Critic' } as any,
       ];
-      store.setAvailableRoles(roles);
-      store.setLoading(false);
+      useRoleStore.getState().setAvailableRoles(roles);
+      useRoleStore.getState().setLoading(false);
 
-      expect(store.availableRoles).toHaveLength(2);
-      expect(store.loading).toBe(false);
+      expect(useRoleStore.getState().availableRoles).toHaveLength(2);
+      expect(useRoleStore.getState().loading).toBe(false);
 
-      store.selectRole('builder', true);
-      store.selectRole('critic', true);
+      useRoleStore.getState().selectRole('builder', true);
+      useRoleStore.getState().selectRole('critic', true);
 
-      expect(store.selectedRoles.builder).toBe(true);
-      expect(store.selectedRoles.critic).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(true);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(true);
 
-      store.clearSelection();
-      expect(store.selectedRoles.builder).toBe(false);
-      expect(store.selectedRoles.critic).toBe(false);
+      useRoleStore.getState().clearSelection();
+      expect(useRoleStore.getState().selectedRoles.builder).toBe(false);
+      expect(useRoleStore.getState().selectedRoles.critic).toBe(false);
     });
   });
 });

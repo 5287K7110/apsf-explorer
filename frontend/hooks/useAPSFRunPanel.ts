@@ -295,9 +295,19 @@ export function useAPSFRunPanel() {
     if (decision === 'Accept') {
       setJudging(true);
       try {
-        await apsfAPI.judgeDecision(selected, 'Accept');
-        appendLog('info', '裁定: Accept → improve.md を記入してください');
-        openEditor();
+        const acceptReason = judgeReason.trim();
+        await apsfAPI.judgeDecision(selected, 'Accept', acceptReason || undefined);
+        appendLog('info', '裁定: Accept → improve.md を記入してください（下書きを用意しました）');
+        // 裁定理由を improve.md の下書きとしてエディタに投入する
+        // （従来 Accept の理由はどこにも残らなかった）
+        setEditorContent(
+          '# Improve\n\n## Summary\n\n' +
+            `Accept — Critic のレビューを確認し、成果を受け入れる。\n\n` +
+            '## Actions Taken\n\n- review.md の指摘事項を確認\n- （実施した確認をここに追記）\n\n' +
+            `## Decision\n\nAccept${acceptReason ? ` — ${acceptReason}` : ''}\n`
+        );
+        setShowEditor(true);
+        setJudgeReason('');
       } catch (e) {
         appendLog('error', e instanceof Error ? e.message : 'judge decision failed');
       } finally {

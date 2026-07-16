@@ -165,6 +165,9 @@ export function applyJudgeDecision(
   if (decision === 'Accept') {
     appendSessionEvent(runDir, 'judge_decision', runId, {
       decision,
+      // Accept の理由も監査ログに残す（従来は Return 系のみ *_review.md に記録され、
+      // Accept の理由は破棄されていた）
+      reason: reason?.trim() || null,
       advisory_recommendation: advisoryRecommendation,
       matches_advisory: matchesAdvisory,
     });
