@@ -408,7 +408,7 @@ export function useAPSFRunPanel() {
     advisory, judgeReason, setJudgeReason, judging, handleJudgeDecision,
     quickComplete, setQuickComplete,
     // Logs
-    logs, logEndRef,
+    logs, logEndRef, appendLog,
     // Transcripts
     executions, executionsLoading, executionsError, loadExecutions,
     viewTranscript, transcriptLogs, transcriptLoading, transcriptError, handleSelectTranscript,

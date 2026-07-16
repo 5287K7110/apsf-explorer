@@ -23,6 +23,7 @@ import { writePhase, nextPhaseAfterWrite } from './write-phase.js';
 import { transition, atomicWrite, setPhaseStatus } from './run-state.js';
 import { TranscriptWriter } from './execution-transcript.js';
 import { resolveFrameworkRoot } from './content-root.js';
+import { workdirGitStatus, workdirGitDiff, dirtySummary } from './workdir-git.js';
 import { type StreamEvent, type RoleProviders } from '../../types/index.js';
 
 export interface NativeExecuteOptions {
@@ -248,6 +249,8 @@ export class NativeApsfExecutor extends EventEmitter {
         resolve({ code, signal, stdout, stderr, durationMs: Date.now() - startedAt })
       );
 
+      // CLI が即終了して stdin が閉じられた場合の EPIPE でプロセスを殺さない
+      child.stdin?.on('error', () => { /* close 側で結果を判定する */ });
       if (opts.stdin !== undefined) {
         child.stdin?.write(opts.stdin);
       }
@@ -274,6 +277,27 @@ export class NativeApsfExecutor extends EventEmitter {
     const permissionMode = process.env.APSF_PERMISSION_MODE || 'acceptEdits';
     // run_config.json の target_workdir（未指定は APSF_ROOT）
     const cwd = this.resolveTargetWorkdir(runId);
+
+    // ── git 統合: BUILD 前の dirty 警告 ──
+    // dirty のまま Build すると、AI の変更と人間の未コミット変更が diff 上で
+    // 区別できなくなる。ブロックはせず、判断材料として警告だけ出す。
+    if (isBuild) {
+      try {
+        const st = await workdirGitStatus(cwd);
+        const dirty = dirtySummary(st);
+        if (dirty) {
+          this.progress(
+            runId,
+            `[git] ⚠ workdir is dirty before BUILD — ${dirty} (AI の変更と混ざるため、コミットしてからの実行を推奨)`,
+            { phase, git: 'dirty-warning' }
+          );
+        } else if (st.isRepo) {
+          this.progress(runId, `[git] workdir clean (branch: ${st.branch})`, { phase });
+        }
+      } catch {
+        /* git 不在などは無視 — 統合は best-effort */
+      }
+    }
 
     let command: string;
     let args: string[];
@@ -368,6 +392,22 @@ export class NativeApsfExecutor extends EventEmitter {
       if (!output.trim()) {
         throw new Error(`${command} returned empty output`);
       }
+      // ── git 統合: BUILD 後の変更サマリ（人間ゲートの判断材料） ──
+      if (isBuild) {
+        try {
+          const d = await workdirGitDiff(cwd);
+          if (d.isRepo) {
+            const statLine = d.stat.split('\n').pop()?.trim() || 'no changes';
+            const untrackedNote = d.untracked.length ? ` / untracked: ${d.untracked.length} file(s)` : '';
+            this.progress(runId, `[git] BUILD による変更: ${statLine}${untrackedNote} — 詳細は Workdir Diff パネルで確認`, {
+              phase,
+              git: 'post-build-diff',
+            });
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
       return output;
     } finally {
       if (codexOutFile) fs.rmSync(codexOutFile, { force: true });
@@ -418,7 +458,19 @@ export class NativeApsfExecutor extends EventEmitter {
   ): void {
     const runDir = resolveRunDir(this.apsfRoot, runId);
     if (!runDir) throw new Error(`Run not found: ${runId}`);
-    writePhase(runDir, content, force ? { force: true, forceReason: force.forceReason } : {});
+    const result = writePhase(runDir, content, force ? { force: true, forceReason: force.forceReason } : {});
+    // 保存に成功した phase の salvage（中断時の部分出力）は消費済みとして削除する。
+    // 次回 BUILD プロンプトへの自動注入（prompt-builder）とペアの後始末。
+    try {
+      const prefix = `salvage-${result.phaseBefore}-`;
+      for (const f of fs.readdirSync(runDir)) {
+        if (f.startsWith(prefix) && f.endsWith('.md')) {
+          fs.rmSync(path.join(runDir, f), { force: true });
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
   }
 
   /** 現在フェーズ（TS ネイティブ検出・parity 検証済み） */

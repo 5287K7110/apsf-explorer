@@ -9,6 +9,9 @@ import { ExecutionModeRouter } from '../services/execution-mode-router.js';
 import { executionEvents } from '../services/event-bus.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
+import { workdirGitDiff } from '../services/apsf-native/workdir-git.js';
+import { proposeSplit, type SplitProposal } from '../services/split-planner.js';
+import { PhaseDetector } from '../services/apsf-native/phase-detector.js';
 import { type ExecutionMode } from '../types/execution-mode.js';
 
 const router = Router();
@@ -207,6 +210,109 @@ router.post('/apsf/:id/write-phase', async (req: Request, res: Response) => {
         ? error.status
         : 400;
     res.status(status).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/runs/apsf/:id/workdir-diff
+ * run の対象 workdir のライブ git diff（人間ゲートの判断材料）
+ */
+router.get('/apsf/:id/workdir-diff', async (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const workdir = apsfRun.getTargetWorkdir(req.params.id);
+    const diff = await workdirGitDiff(workdir);
+    res.json({ runId: req.params.id, workdir, ...diff });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/runs/apsf/:id/split-proposal
+ * 大きなタスクの分割案を AI（read-only）に生成させる
+ */
+router.post('/apsf/:id/split-proposal', async (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    if (apsfRun.listExecuting().length > 0) {
+      res.status(409).json({ error: 'An execution is in progress. Wait for it to finish first.' });
+      return;
+    }
+    const runDir = apsfRun.getRunDir(req.params.id);
+    if (!runDir) {
+      res.status(404).json({ error: `Run not found: ${req.params.id}` });
+      return;
+    }
+    const provider = req.body?.provider === 'codex' ? 'codex' : 'claude';
+    const workdir = apsfRun.getTargetWorkdir(req.params.id);
+    const result = await proposeSplit(runDir, provider, workdir);
+    res.json({ runId: req.params.id, provider, proposals: result.proposals });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/runs/apsf/:id/split-apply
+ * 人間が承認した分割案から sub-run 群を作成する（workdir は親 run を継承）
+ */
+router.post('/apsf/:id/split-apply', async (req: Request, res: Response) => {
+  try {
+    if (!apsfRun.isAvailable()) {
+      res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
+      return;
+    }
+    const runs = req.body?.runs as SplitProposal[] | undefined;
+    if (!Array.isArray(runs) || runs.length === 0 || runs.length > 8) {
+      res.status(400).json({ error: 'runs (array of 1-8 {name, task}) is required' });
+      return;
+    }
+    const parentWorkdir = apsfRun.getTargetWorkdir(req.params.id);
+    const today = new Date().toISOString().slice(0, 10);
+    const created: string[] = [];
+    const errors: string[] = [];
+    for (const r of runs) {
+      const name = String(r.name ?? '').trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9._-]{1,60}$/.test(name)) {
+        errors.push(`invalid name: ${r.name}`);
+        continue;
+      }
+      const runName = `${today}_${name}`;
+      if (PhaseDetector.countMeaningfulLines(String(r.task ?? '')) <= 3) {
+        errors.push(
+          `${runName}: task body too thin (needs more than 3 meaningful lines — ` +
+            'headings and unchecked checkboxes do not count)'
+        );
+        continue;
+      }
+      try {
+        await apsfRun.createRun(runName, {
+          light: true,
+          taxonomy: 'work',
+          workdir: parentWorkdir !== process.env.APSF_ROOT ? parentWorkdir : undefined,
+        });
+        await apsfRun.writePhase(runName, String(r.task ?? ''), { filename: 'task.md' });
+        created.push(runName);
+      } catch (e) {
+        errors.push(`${runName}: ${e instanceof Error ? e.message : 'failed'}`);
+      }
+    }
+    res.json({ runId: req.params.id, created, errors });
+  } catch (error) {
+    res.status(400).json({
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }

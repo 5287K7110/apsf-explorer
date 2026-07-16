@@ -7,6 +7,8 @@ import { PhaseStatusPanel } from './apsf/PhaseStatusPanel';
 import { PhaseEditor } from './apsf/PhaseEditor';
 import { ExecutionControls } from './apsf/ExecutionControls';
 import { ExecutionQueue } from './apsf/ExecutionQueue';
+import { WorkdirDiffPanel } from './apsf/WorkdirDiffPanel';
+import { SplitPanel } from './apsf/SplitPanel';
 import { LogPane } from './apsf/LogPane';
 
 /**
@@ -84,6 +86,20 @@ export const APSFRunPanel: React.FC = () => {
               onOpenEditor={h.openEditor}
               onJudgeDecision={h.handleJudgeDecision}
             />
+
+            {/* AI 実行前（task/plan 記入済み）の段階でのみ分割を提案できる */}
+            {(h.phase === 'BUILD_NEEDED' || h.phase === 'PLAN_NEEDED') && (
+              <SplitPanel
+                runId={h.selected}
+                provider={h.provider}
+                onApplied={(created) => {
+                  h.loadRuns();
+                  created.forEach((r) => h.appendLog('info', `分割: sub-run 作成 → ${r}`));
+                }}
+              />
+            )}
+
+            <WorkdirDiffPanel runId={h.selected} />
 
             <ArtifactViewer runId={h.selected} existingFiles={h.existingFiles} />
 

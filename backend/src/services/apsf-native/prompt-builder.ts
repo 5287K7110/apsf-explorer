@@ -57,6 +57,7 @@ export function renderBuildPrompt(opts: {
   handoffContent?: string;
   draftContent?: string;
   buildReviewContent?: string;
+  salvageContent?: string;
 }): string {
   let prompt =
     'Create the final deliverable and build.md based on the following inputs.\n\n' +
@@ -69,6 +70,14 @@ export function renderBuildPrompt(opts: {
   }
   if (opts.draftContent) {
     prompt += section('JuniorBuilder Draft (for reference)', opts.draftContent);
+  }
+  if (opts.salvageContent) {
+    prompt += section(
+      'Previous Interrupted Attempt (salvaged partial output)',
+      opts.salvageContent +
+        '\n\nNOTE: The previous attempt was interrupted (timeout/kill). ' +
+        'Reuse whatever is already correct instead of redoing it from scratch, then complete the remaining work.'
+    );
   }
   prompt +=
     '---\n\n' +
@@ -147,6 +156,22 @@ function readContextFiles(info: PhaseInfo, runDir: string): Record<string, strin
   return context;
 }
 
+/** 中断された前回実行の部分出力（salvage-<PHASE>-*.md）の最新 1 件を返す */
+function latestSalvage(runDir: string, phase: string): string | undefined {
+  try {
+    const prefix = `salvage-${phase}-`;
+    const files = fs
+      .readdirSync(runDir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith('.md'))
+      .sort();
+    if (files.length === 0) return undefined;
+    const content = fs.readFileSync(path.join(runDir, files[files.length - 1]), 'utf-8').trim();
+    return content || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function selectionNote(
   selection: SpecialistSelection,
   frameworkRoot: string,
@@ -203,6 +228,7 @@ export function buildPhasePrompt(runDir: string, frameworkRoot: string): {
           planContent,
           handoffContent: get('handoff.md'),
           buildReviewContent: get('build_review.md'),
+          salvageContent: latestSalvage(runDir, 'BUILD_NEEDED'),
         }),
       };
     }

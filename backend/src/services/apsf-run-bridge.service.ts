@@ -130,6 +130,21 @@ export class APSFRunBridge extends EventEmitter {
     return resolveRunDir(this.apsfRoot, runName);
   }
 
+  /** run の対象プロジェクト（run_config.json の target_workdir、無指定は APSF_ROOT） */
+  getTargetWorkdir(runName: string): string {
+    const runDir = resolveRunDir(this.apsfRoot, runName);
+    if (runDir) {
+      const p = path.join(runDir, 'run_config.json');
+      try {
+        if (fs.existsSync(p)) {
+          const cfg = JSON.parse(fs.readFileSync(p, 'utf-8')) as { target_workdir?: string };
+          if (cfg.target_workdir && fs.existsSync(cfg.target_workdir)) return cfg.target_workdir;
+        }
+      } catch { /* fall through */ }
+    }
+    return this.apsfRoot;
+  }
+
   /**
    * run に実在する読み取り可能な成果物ファイル一覧（成果物ビューア用）。
    */

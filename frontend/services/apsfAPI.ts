@@ -63,6 +63,20 @@ export interface ApsfTranscriptEvent {
   data?: Record<string, unknown>;
 }
 
+export interface WorkdirDiff {
+  isRepo: boolean;
+  branch?: string;
+  stat: string;
+  diff: string;
+  truncated: boolean;
+  untracked: string[];
+}
+
+export interface SplitProposal {
+  name: string;
+  task: string;
+}
+
 export type ApsfJudgeDecision = 'Accept' | 'Return to Build' | 'Return to Plan';
 
 export interface ApsfJudgeResult {
@@ -146,6 +160,29 @@ export const apsfAPI = {
     return apiClient.post<{ runId: string; status: string }>(
       `/runs/${encodeURIComponent(runId)}/cancel`,
       {}
+    );
+  },
+
+  /** run の対象 workdir のライブ git diff */
+  getWorkdirDiff(runId: string) {
+    return apiClient.get<WorkdirDiff & { runId: string; workdir: string }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/workdir-diff`
+    );
+  },
+
+  /** タスク分割案の生成（AI read-only 実行） */
+  splitProposal(runId: string, provider: 'claude' | 'codex') {
+    return apiClient.post<{ runId: string; provider: string; proposals: SplitProposal[] }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/split-proposal`,
+      { provider }
+    );
+  },
+
+  /** 承認済み分割案から sub-run を一括作成 */
+  splitApply(runId: string, runs: SplitProposal[]) {
+    return apiClient.post<{ runId: string; created: string[]; errors: string[] }>(
+      `/runs/apsf/${encodeURIComponent(runId)}/split-apply`,
+      { runs }
     );
   },
 
