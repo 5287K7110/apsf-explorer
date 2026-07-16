@@ -94,6 +94,22 @@ export function isValidTransition(from: string, to: string): boolean {
   return VALID_TRANSITIONS.has(`${from}->${to}`);
 }
 
+/** phase → (owner, 対象ファイル)（main.py phase_target_map） */
+export const PHASE_TARGET: Record<string, { role: string; file: string }> = {
+  SETUP_NEEDED: { role: 'Human', file: 'execution-assignment.md' },
+  GOAL_NEEDED: { role: 'Human', file: 'goal.md' },
+  PLAN_NEEDED: { role: 'Planner', file: 'plan.md' },
+  IMPROVE_PLAN_OPTIONAL: { role: 'Judge (Human)', file: 'improve-plan.md' },
+  BUILD_NEEDED: { role: 'Builder', file: 'build.md' },
+  REVIEW_NEEDED: { role: 'Critic', file: 'review.md' },
+  IMPROVE_NEEDED: { role: 'Judge (Human)', file: 'improve.md' },
+  VERIFY_OPTIONAL: { role: 'Judge (Human)', file: 'verify.md' },
+  RESULT_NEEDED: { role: 'Human', file: 'result.md' },
+  TRANSCRIPT_RECOMMENDED: { role: 'Human (optional)', file: 'transcript.md' },
+  // light run
+  TASK_NEEDED: { role: 'Human', file: 'task.md' },
+};
+
 export function isHumanPhase(phase: string): boolean {
   return HUMAN_OWNED_PHASES.has(phase as ApsfPhase);
 }

@@ -135,12 +135,16 @@ router.post('/apsf', async (req: Request, res: Response) => {
       res.status(503).json({ error: 'APSF framework not available. Set APSF_ROOT.' });
       return;
     }
-    const { runName, light, taxonomy } = req.body || {};
+    const { runName, light, taxonomy, workdir } = req.body || {};
     if (!runName) {
       res.status(400).json({ error: 'runName is required' });
       return;
     }
-    await apsfRun.createRun(runName, { light: Boolean(light), taxonomy });
+    await apsfRun.createRun(runName, {
+      light: Boolean(light),
+      taxonomy,
+      workdir: typeof workdir === 'string' && workdir.trim() ? workdir.trim() : undefined,
+    });
     const info = apsfRun.getPhaseInfo(runName);
     res.json({ runName, phase: info.phase, fileToWrite: info.fileToWrite });
   } catch (error) {

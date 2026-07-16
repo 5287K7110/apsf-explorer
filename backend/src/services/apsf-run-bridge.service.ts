@@ -214,16 +214,34 @@ export class APSFRunBridge extends EventEmitter {
    */
   async createRun(
     runName: string,
-    options: { light?: boolean; taxonomy?: string } = {}
+    options: { light?: boolean; taxonomy?: string; workdir?: string } = {}
   ): Promise<void> {
     this.assertRunName(runName);
     if (options.taxonomy && !['fw-improvement', 'work'].includes(options.taxonomy)) {
       throw new Error(`Invalid taxonomy: ${options.taxonomy}`);
     }
+    // workdir は run 作成前に検証する（半端な run を残さない）
+    let workdir: string | undefined;
+    if (options.workdir) {
+      workdir = path.resolve(options.workdir);
+      if (!fs.existsSync(workdir) || !fs.statSync(workdir).isDirectory()) {
+        throw new Error(`workdir does not exist or is not a directory: ${options.workdir}`);
+      }
+    }
     startRun(this.apsfRoot, runName, {
       light: options.light,
       taxonomy: options.taxonomy as 'fw-improvement' | 'work' | undefined,
     });
+    if (workdir) {
+      const runDir = resolveRunDir(this.apsfRoot, runName);
+      if (runDir) {
+        fs.writeFileSync(
+          path.join(runDir, 'run_config.json'),
+          JSON.stringify({ target_workdir: workdir }, null, 2),
+          'utf-8'
+        );
+      }
+    }
   }
 
   /** phase ファイルの内容を読む（存在しなければ null） */

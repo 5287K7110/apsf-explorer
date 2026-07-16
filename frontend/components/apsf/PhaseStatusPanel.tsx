@@ -1,7 +1,7 @@
 import React from 'react';
 import { CircleDot, Loader2, PenLine, RefreshCw, Scale } from 'lucide-react';
 import { ApsfAdvisory, ApsfJudgeDecision } from '../../services/apsfAPI';
-import { isHumanPhase } from '../../../backend/src/services/apsf-native/phases';
+import { isHumanPhase } from '../../utils/phases';
 
 function phaseColor(phase: string): string {
   if (phase === 'COMPLETE') return 'text-green-400 border-green-700 bg-green-900/30';

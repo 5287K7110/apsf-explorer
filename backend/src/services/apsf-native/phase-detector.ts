@@ -13,7 +13,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { type ApsfPhase, PHASES, isValidTransition, isHumanPhase } from './phases.js';
+import { type ApsfPhase, PHASES, PHASE_TARGET, isValidTransition, isHumanPhase } from './phases.js';
 import { VENDORED_CONTENT_DIR } from './content-root.js';
 
 /** フェーズ検出で走査する既知ファイル（ワークフロー順） */
@@ -276,6 +276,18 @@ export class PhaseDetector {
         return info('REVIEW_NEEDED', 'Critic', 'review.md', ['task.md', 'build.md'],
           'build.md filled; review.md not filled (light run)');
       }
+      // light run にも Judge の人間ゲートはある（遷移テーブルと同じ流れ）。
+      // 従来ここで COMPLETE を返していたため、canonical=IMPROVE_NEEDED と食い違い
+      // UI の記入ボタンが消えるバグがあった。
+      if (!this.isFilled('improve.md')) {
+        return info('IMPROVE_NEEDED', 'Judge (Human)', 'improve.md',
+          ['review.md', 'build.md', 'improve_review.md'],
+          'light run; review.md filled; improve.md not filled');
+      }
+      if (!this.isFilled('result.md')) {
+        return info('RESULT_NEEDED', 'Human', 'result.md', ['improve.md', 'build.md', 'task.md'],
+          'light run; improve.md filled; result.md not filled');
+      }
       return info('COMPLETE', '(none)', '(none)', [], 'All light run files filled');
     }
 
@@ -385,10 +397,17 @@ export class PhaseDetector {
       return { ...advisory, source: 'canonical' };
     }
 
+    // canonical を優先する場合、fileToWrite / nextRole も canonical の phase から
+    // 導出する（advisory 側の値を残すと「IMPROVE_NEEDED なのに (none)」のような
+    // 実行不能な表示になる）
+    const target = PHASE_TARGET[canonical];
     return {
       ...advisory,
       phase: canonical as ApsfPhase,
       humanOwned: isHumanPhase(canonical),
+      ...(target && target.file !== '(none)'
+        ? { fileToWrite: target.file, nextRole: target.role }
+        : {}),
       source: 'canonical',
       decisionReason: `canonical run_state.json phase (advisory=${advisory.phase})`,
     };

@@ -57,6 +57,8 @@ export const APSFRunPanel: React.FC = () => {
         onNewRunNameChange={h.setNewRunName}
         newRunLight={h.newRunLight}
         onNewRunLightChange={h.setNewRunLight}
+        newRunWorkdir={h.newRunWorkdir}
+        onNewRunWorkdirChange={h.setNewRunWorkdir}
         creating={h.creating}
         onCreateRun={h.handleCreateRun}
       />

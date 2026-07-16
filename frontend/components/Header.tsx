@@ -1,16 +1,13 @@
 import React from 'react';
-import { Menu, X, Moon, Settings, LogOut, Wifi, WifiOff } from 'lucide-react';
-import { useRunStore } from '../store/runStore';
+import { Moon, Settings, LogOut, Wifi, WifiOff } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 interface HeaderProps {
-  onMenuClick: () => void;
   className?: string;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onMenuClick, className = '' }) => {
-  const sidebarOpen = useRunStore((state) => state.sidebarOpen);
+export const Header: React.FC<HeaderProps> = ({ className = '' }) => {
   const { user, logout } = useAuth();
   const { connectionStatus } = useWebSocket();
 
@@ -23,13 +20,6 @@ export const Header: React.FC<HeaderProps> = ({ onMenuClick, className = '' }) =
       <div className="flex items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
         {/* Logo and Title */}
         <div className="flex items-center gap-3">
-          <button
-            onClick={onMenuClick}
-            className="btn btn-icon btn-ghost lg:hidden"
-            aria-label="Toggle menu"
-          >
-            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-600">
               <span className="text-sm font-bold text-white">A</span>

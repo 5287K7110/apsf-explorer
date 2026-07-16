@@ -199,6 +199,15 @@ function testPhaseDetection(): void {
       setup(dir);
       const detected = new PhaseDetector(dir).detect();
       check(detected.phase === phase, `${name} → ${detected.phase}`);
+      // 回帰ガード: human-owned phase は必ず実行可能な fileToWrite を持つ
+      // （light run で canonical=IMPROVE_NEEDED なのに advisory 側の COMPLETE が
+      //  fileToWrite='(none)' を返し、UI の記入ボタンが消えるバグの再発防止）
+      if (detected.humanOwned) {
+        check(
+          Boolean(detected.fileToWrite) && detected.fileToWrite !== '(none)',
+          `${name} → human-owned phase has actionable fileToWrite (${detected.fileToWrite})`
+        );
+      }
     }
   } finally {
     cleanup();

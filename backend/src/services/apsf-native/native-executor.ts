@@ -35,8 +35,21 @@ export interface NativeExecuteOptions {
 
 interface CmdResult {
   code: number | null;
+  signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  durationMs: number;
+}
+
+/** 経過時間の表示（90 秒未満は秒、それ以上は分） */
+function fmtDuration(ms: number): string {
+  return ms >= 90_000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`;
+}
+
+/** 実行タイムアウト（ms）。APSF_EXEC_TIMEOUT_MS で上書き可（既定 15 分） */
+export function defaultExecTimeoutMs(): number {
+  const raw = Number(process.env.APSF_EXEC_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 15 * 60 * 1000;
 }
 
 /** 実行マーカーのファイル名（クラッシュ回復用。正常終了で削除される） */
@@ -172,9 +185,15 @@ export class NativeApsfExecutor extends EventEmitter {
   private run(
     command: string,
     args: string[],
-    opts: { stdin?: string; timeoutMs?: number; onStdout?: (chunk: string) => void } = {}
+    opts: {
+      stdin?: string;
+      timeoutMs?: number;
+      onStdout?: (chunk: string) => void;
+      cwd?: string;
+    } = {}
   ): Promise<CmdResult> {
     return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
       // CLI セッション認証を使う（.env のプレースホルダーキー継承で
       // "Invalid API key" になる事故を防ぐ — ps1 時代と同じ対策）
       const env = { ...process.env };
@@ -184,10 +203,10 @@ export class NativeApsfExecutor extends EventEmitter {
       env.PYTHONIOENCODING = 'utf-8';
 
       const child = spawn(command, args, {
-        cwd: this.apsfRoot,
+        cwd: opts.cwd ?? this.apsfRoot,
         shell: true, // Windows の .cmd/.exe シム対応
         env,
-        timeout: opts.timeoutMs ?? 15 * 60 * 1000,
+        timeout: opts.timeoutMs ?? defaultExecTimeoutMs(),
       });
 
       let stdout = '';
@@ -199,7 +218,9 @@ export class NativeApsfExecutor extends EventEmitter {
       });
       child.stderr?.on('data', (d) => (stderr += d.toString()));
       child.on('error', reject);
-      child.on('close', (code) => resolve({ code, stdout, stderr }));
+      child.on('close', (code, signal) =>
+        resolve({ code, signal, stdout, stderr, durationMs: Date.now() - startedAt })
+      );
 
       if (opts.stdin !== undefined) {
         child.stdin?.write(opts.stdin);
@@ -225,6 +246,8 @@ export class NativeApsfExecutor extends EventEmitter {
   ): Promise<string> {
     const isBuild = phase === 'BUILD_NEEDED';
     const permissionMode = process.env.APSF_PERMISSION_MODE || 'acceptEdits';
+    // run_config.json の target_workdir（未指定は APSF_ROOT）
+    const cwd = this.resolveTargetWorkdir(runId);
 
     let command: string;
     let args: string[];
@@ -234,7 +257,7 @@ export class NativeApsfExecutor extends EventEmitter {
     const override = process.env.APSF_NATIVE_CLI_OVERRIDE;
     if (override) {
       this.progress(runId, `[native] CLI override active: ${override}`, { phase });
-      const res = await this.run(override, [], { stdin: prompt, timeoutMs });
+      const res = await this.run(override, [], { stdin: prompt, timeoutMs, cwd });
       if (res.code !== 0) {
         throw new Error(`override CLI exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`);
       }
@@ -271,18 +294,47 @@ export class NativeApsfExecutor extends EventEmitter {
       ];
     }
 
-    this.progress(runId, `[native] invoking ${command} (phase=${phase}, tools=${isBuild ? 'on' : 'off'})`, { phase });
+    this.progress(
+      runId,
+      `[native] invoking ${command} (phase=${phase}, tools=${isBuild ? 'on' : 'off'}, workdir=${cwd})`,
+      { phase }
+    );
 
     try {
       const res = await this.run(command, args, {
         stdin: prompt,
         timeoutMs,
+        cwd,
         onStdout: (chunk) => this.progress(runId, chunk, { phase, stream: 'ai' }),
       });
       if (res.code !== 0) {
-        throw new Error(
-          `${command} exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`
-        );
+        // 部分出力のサルベージ — タイムアウト等で数分ぶんの生成物を破棄しない
+        const partial = (
+          codexOutFile && fs.existsSync(codexOutFile)
+            ? fs.readFileSync(codexOutFile, 'utf-8')
+            : res.stdout
+        ).trim();
+        if (partial) {
+          const salvaged = this.salvagePartialOutput(runId, phase, partial);
+          if (salvaged) {
+            this.progress(runId, `[native] partial output salvaged to ${salvaged}`, { phase });
+          }
+        }
+        const detail = (res.stderr || res.stdout).slice(0, 300);
+        const timedOut = res.code === null && res.durationMs >= timeoutMs - 1000;
+        if (timedOut) {
+          throw new Error(
+            `${command} timed out after ${fmtDuration(res.durationMs)} ` +
+              `(limit ${fmtDuration(timeoutMs)} — raise with APSF_EXEC_TIMEOUT_MS): ${detail}`
+          );
+        }
+        if (res.code === null) {
+          throw new Error(
+            `${command} was killed after ${fmtDuration(res.durationMs)}` +
+              `${res.signal ? ` (signal ${res.signal})` : ''}: ${detail}`
+          );
+        }
+        throw new Error(`${command} exited with code ${res.code}: ${detail}`);
       }
       const output = codexOutFile && fs.existsSync(codexOutFile)
         ? fs.readFileSync(codexOutFile, 'utf-8')
@@ -293,6 +345,42 @@ export class NativeApsfExecutor extends EventEmitter {
       return output;
     } finally {
       if (codexOutFile) fs.rmSync(codexOutFile, { force: true });
+    }
+  }
+
+  /**
+   * run の対象プロジェクトディレクトリを解決する。
+   * run_config.json の target_workdir が存在すればそれを AI の cwd に使い、
+   * なければ従来どおり APSF_ROOT（workdir 誤爆防止 — 別 repo を書き換えない）。
+   */
+  private resolveTargetWorkdir(runId: string): string {
+    const runDir = resolveRunDir(this.apsfRoot, runId);
+    if (runDir) {
+      const p = path.join(runDir, 'run_config.json');
+      try {
+        if (fs.existsSync(p)) {
+          const cfg = JSON.parse(fs.readFileSync(p, 'utf-8')) as { target_workdir?: string };
+          if (cfg.target_workdir && fs.existsSync(cfg.target_workdir)) {
+            return cfg.target_workdir;
+          }
+        }
+      } catch {
+        // 壊れた run_config.json は無視して APSF_ROOT にフォールバック
+      }
+    }
+    return this.apsfRoot;
+  }
+
+  /** 失敗した実行の部分出力を runDir に保存する（レビュー・再利用のため） */
+  private salvagePartialOutput(runId: string, phase: string, content: string): string | null {
+    const runDir = resolveRunDir(this.apsfRoot, runId);
+    if (!runDir) return null;
+    const name = `salvage-${phase}-${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
+    try {
+      fs.writeFileSync(path.join(runDir, name), content, 'utf-8');
+      return name;
+    } catch {
+      return null;
     }
   }
 
@@ -327,7 +415,7 @@ export class NativeApsfExecutor extends EventEmitter {
   }
 
   private async executePhaseCore(opts: NativeExecuteOptions): Promise<string> {
-    const { runId, provider, dryRun, timeoutMs = 15 * 60 * 1000 } = opts;
+    const { runId, provider, dryRun, timeoutMs = defaultExecTimeoutMs() } = opts;
     const info = this.detectPhase(runId);
 
     if (isHumanPhase(info.phase)) {

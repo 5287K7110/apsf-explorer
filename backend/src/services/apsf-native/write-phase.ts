@@ -20,24 +20,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { PhaseDetector } from './phase-detector.js';
-import { type ApsfPhase } from './phases.js';
+import { type ApsfPhase, PHASE_TARGET } from './phases.js';
 import { transition, loadRunState, atomicWrite, appendSessionEvent } from './run-state.js';
-
-/** phase → (owner, 対象ファイル)（main.py phase_target_map） */
-const PHASE_TARGET: Record<string, { role: string; file: string }> = {
-  SETUP_NEEDED: { role: 'Human', file: 'execution-assignment.md' },
-  GOAL_NEEDED: { role: 'Human', file: 'goal.md' },
-  PLAN_NEEDED: { role: 'Planner', file: 'plan.md' },
-  IMPROVE_PLAN_OPTIONAL: { role: 'Judge (Human)', file: 'improve-plan.md' },
-  BUILD_NEEDED: { role: 'Builder', file: 'build.md' },
-  REVIEW_NEEDED: { role: 'Critic', file: 'review.md' },
-  IMPROVE_NEEDED: { role: 'Judge (Human)', file: 'improve.md' },
-  VERIFY_OPTIONAL: { role: 'Judge (Human)', file: 'verify.md' },
-  RESULT_NEEDED: { role: 'Human', file: 'result.md' },
-  TRANSCRIPT_RECOMMENDED: { role: 'Human (optional)', file: 'transcript.md' },
-  // light run
-  TASK_NEEDED: { role: 'Human', file: 'task.md' },
-};
 
 const TRANSPORT_LINE_RE = new RegExp(
   '^\\s*(?:' +

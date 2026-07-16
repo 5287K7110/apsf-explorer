@@ -83,7 +83,10 @@ export const apsfAPI = {
   },
 
   /** 新しい run を作成（apsf start-run 経由） */
-  createRun(runName: string, options: { light?: boolean; taxonomy?: string } = {}) {
+  createRun(
+    runName: string,
+    options: { light?: boolean; taxonomy?: string; workdir?: string } = {}
+  ) {
     return apiClient.post<{ runName: string; phase: string; fileToWrite: string }>(
       '/runs/apsf',
       { runName, ...options }

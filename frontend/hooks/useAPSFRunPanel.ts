@@ -32,6 +32,8 @@ export function useAPSFRunPanel() {
   const [showCreate, setShowCreate] = useState(false);
   const [newRunName, setNewRunName] = useState('');
   const [newRunLight, setNewRunLight] = useState(true);
+  // AI 実行の作業ディレクトリ（未指定なら APSF_ROOT — 別プロジェクトを対象にする run 用）
+  const [newRunWorkdir, setNewRunWorkdir] = useState('');
   const [creating, setCreating] = useState(false);
   // human フェーズエディタ
   const [showEditor, setShowEditor] = useState(false);
@@ -257,9 +259,14 @@ export function useAPSFRunPanel() {
       const pad = (n: number) => String(n).padStart(2, '0');
       const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       const fullName = /^\d{4}-\d{2}-\d{2}/.test(name) ? name : `${today}_${name}`;
-      const res = await apsfAPI.createRun(fullName, { light: newRunLight, taxonomy: 'work' });
+      const res = await apsfAPI.createRun(fullName, {
+        light: newRunLight,
+        taxonomy: 'work',
+        workdir: newRunWorkdir.trim() || undefined,
+      });
       setShowCreate(false);
       setNewRunName('');
+      setNewRunWorkdir('');
       await loadRuns();
       setSelected(res.runName);
     } catch (e) {
@@ -345,7 +352,8 @@ export function useAPSFRunPanel() {
     // Run list
     runs, selected, setSelected, loadRuns,
     // Run creation
-    showCreate, setShowCreate, newRunName, setNewRunName, newRunLight, setNewRunLight, creating, handleCreateRun,
+    showCreate, setShowCreate, newRunName, setNewRunName, newRunLight, setNewRunLight,
+    newRunWorkdir, setNewRunWorkdir, creating, handleCreateRun,
     // Phase
     phase, phaseLoading, phaseStatus, lastError, fileToWrite, nextRole, existingFiles, detectPhase,
     // Execution
