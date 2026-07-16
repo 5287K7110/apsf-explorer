@@ -78,6 +78,8 @@ export const APSFRunPanel: React.FC = () => {
               judgeReason={h.judgeReason}
               onJudgeReasonChange={h.setJudgeReason}
               judging={h.judging}
+              quickComplete={h.quickComplete}
+              onQuickCompleteChange={h.setQuickComplete}
               onDetectPhase={() => h.detectPhase(h.selected)}
               onOpenEditor={h.openEditor}
               onJudgeDecision={h.handleJudgeDecision}

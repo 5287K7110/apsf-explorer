@@ -48,6 +48,8 @@ export function useAPSFRunPanel() {
   // Judge 裁定（IMPROVE_NEEDED）
   const [judgeReason, setJudgeReason] = useState('');
   const [judging, setJudging] = useState(false);
+  // Accept 時に improve.md / result.md を自動記録して完了まで進める
+  const [quickComplete, setQuickComplete] = useState(true);
   // 実行キュー
   const [queueState, setQueueState] = useState<{ running: string | null; queued: string[] }>({
     running: null,
@@ -307,19 +309,36 @@ export function useAPSFRunPanel() {
       try {
         const acceptReason = judgeReason.trim();
         await apsfAPI.judgeDecision(selected, 'Accept', acceptReason || undefined);
-        appendLog('info', '裁定: Accept → improve.md を記入してください（下書きを用意しました）');
-        // 裁定理由を improve.md の下書きとしてエディタに投入する
-        // （従来 Accept の理由はどこにも残らなかった）
-        setEditorContent(
+        const improveDraft =
           '# Improve\n\n## Summary\n\n' +
-            `Accept — Critic のレビューを確認し、成果を受け入れる。\n\n` +
-            '## Actions Taken\n\n- review.md の指摘事項を確認\n- （実施した確認をここに追記）\n\n' +
-            `## Decision\n\nAccept${acceptReason ? ` — ${acceptReason}` : ''}\n`
-        );
-        setShowEditor(true);
-        setJudgeReason('');
+          'Accept — Critic のレビューを確認し、成果を受け入れる。\n\n' +
+          '## Actions Taken\n\n- review.md の指摘事項と judge advisory を確認\n- 対象の変更内容を確認して受け入れを判断\n\n' +
+          `## Decision\n\nAccept${acceptReason ? ` — ${acceptReason}` : ''}\n`;
+
+        if (quickComplete) {
+          // improve.md → result.md を自動記録して RESULT まで進める（quick-complete）。
+          // どちらも通常の write-phase 経由なので、遷移検証・上書き保護はそのまま効く
+          const w1 = await apsfAPI.writePhase(selected, improveDraft, 'improve.md');
+          appendLog('info', `自動記録: ${w1.fileWritten} → phase=${w1.phase}`);
+          const resultDraft =
+            '# Result\n\n## Outcome\n\n' +
+            'Judge が Accept を裁定し、この run を完了とした。\n\n' +
+            `## Judge Decision\n\nAccept${acceptReason ? ` — ${acceptReason}` : ''}\n\n` +
+            '## Notes\n\n- improve.md / result.md は Accept 時の自動記録（quick-complete）\n- 詳細は review.md と judge advisory を参照\n';
+          const w2 = await apsfAPI.writePhase(selected, resultDraft, 'result.md');
+          appendLog('info', `自動記録: ${w2.fileWritten} → phase=${w2.phase} 🎉`);
+          setJudgeReason('');
+          detectPhase(selected);
+        } else {
+          appendLog('info', '裁定: Accept → improve.md を記入してください（下書きを用意しました）');
+          // 裁定理由を improve.md の下書きとしてエディタに投入する
+          setEditorContent(improveDraft);
+          setShowEditor(true);
+          setJudgeReason('');
+        }
       } catch (e) {
         appendLog('error', e instanceof Error ? e.message : 'judge decision failed');
+        detectPhase(selected);
       } finally {
         setJudging(false);
       }
@@ -387,6 +406,7 @@ export function useAPSFRunPanel() {
     showEditor, setShowEditor, editorContent, setEditorContent, editorLoading, saving, handleSavePhase, openEditor,
     // Judge
     advisory, judgeReason, setJudgeReason, judging, handleJudgeDecision,
+    quickComplete, setQuickComplete,
     // Logs
     logs, logEndRef,
     // Transcripts

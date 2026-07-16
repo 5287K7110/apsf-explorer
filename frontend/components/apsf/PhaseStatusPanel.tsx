@@ -21,6 +21,8 @@ interface Props {
   judgeReason: string;
   onJudgeReasonChange: (v: string) => void;
   judging: boolean;
+  quickComplete: boolean;
+  onQuickCompleteChange: (v: boolean) => void;
   onDetectPhase: () => void;
   onOpenEditor: () => void;
   onJudgeDecision: (d: ApsfJudgeDecision) => void;
@@ -30,6 +32,7 @@ export const PhaseStatusPanel: React.FC<Props> = ({
   selected, phase, phaseLoading, phaseStatus, lastError,
   fileToWrite, nextRole, advisory,
   judgeReason, onJudgeReasonChange, judging,
+  quickComplete, onQuickCompleteChange,
   onDetectPhase, onOpenEditor, onJudgeDecision,
 }) => (
   <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -126,6 +129,15 @@ export const PhaseStatusPanel: React.FC<Props> = ({
           className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded text-xs text-slate-200 font-mono resize-y focus:border-amber-600 focus:outline-none"
           data-testid="apsf-judge-reason"
         />
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <input
+            type="checkbox"
+            checked={quickComplete}
+            onChange={(e) => onQuickCompleteChange(e.target.checked)}
+            data-testid="apsf-judge-quick-complete"
+          />
+          Accept 時に improve.md / result.md を自動記録して完了まで進める
+        </label>
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => onJudgeDecision('Accept')}
