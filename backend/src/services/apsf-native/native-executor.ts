@@ -23,11 +23,13 @@ import { writePhase, nextPhaseAfterWrite } from './write-phase.js';
 import { transition, atomicWrite, setPhaseStatus } from './run-state.js';
 import { TranscriptWriter } from './execution-transcript.js';
 import { resolveFrameworkRoot } from './content-root.js';
-import { type StreamEvent } from '../../types/index.js';
+import { type StreamEvent, type RoleProviders } from '../../types/index.js';
 
 export interface NativeExecuteOptions {
   runId: string;
   provider: 'claude' | 'codex';
+  /** 役割別プロバイダー（未指定の役割は provider にフォールバック） */
+  providers?: RoleProviders;
   maxCycles?: number;
   dryRun?: boolean;
   timeoutMs?: number;
@@ -39,6 +41,30 @@ interface CmdResult {
   stdout: string;
   stderr: string;
   durationMs: number;
+}
+
+/** フェーズ → 役割キー（providers map の lookup 用） */
+function phaseToRoleKey(phase: string): keyof RoleProviders | null {
+  switch (phase) {
+    case 'PLAN_NEEDED': return 'plan';
+    case 'BUILD_NEEDED': return 'build';
+    case 'REVIEW_NEEDED': return 'review';
+    default: return null;
+  }
+}
+
+/** 役割別プロバイダーを解決（未指定は fallback） */
+function resolveProvider(
+  phase: string,
+  fallback: 'claude' | 'codex',
+  providers?: RoleProviders
+): 'claude' | 'codex' {
+  if (!providers) return fallback;
+  const key = phaseToRoleKey(phase);
+  if (!key) return fallback;
+  const v = providers[key];
+  if (v === 'claude' || v === 'codex') return v;
+  return fallback;
 }
 
 /** 経過時間の表示（90 秒未満は秒、それ以上は分） */
@@ -409,13 +435,13 @@ export class NativeApsfExecutor extends EventEmitter {
   async executePhase(opts: NativeExecuteOptions): Promise<string> {
     return this.withTranscript(
       opts.runId,
-      { command: 'phase', provider: opts.provider, dryRun: Boolean(opts.dryRun) },
+      { command: 'phase', provider: opts.provider, ...(opts.providers ? { providers: opts.providers } : {}), dryRun: Boolean(opts.dryRun) },
       () => this.executePhaseCore(opts)
     );
   }
 
   private async executePhaseCore(opts: NativeExecuteOptions): Promise<string> {
-    const { runId, provider, dryRun, timeoutMs = defaultExecTimeoutMs() } = opts;
+    const { runId, provider, providers, dryRun, timeoutMs = defaultExecTimeoutMs() } = opts;
     const info = this.detectPhase(runId);
 
     if (isHumanPhase(info.phase)) {
@@ -428,8 +454,15 @@ export class NativeApsfExecutor extends EventEmitter {
       throw new Error(`Phase ${info.phase} is not auto-executable`);
     }
 
-    this.progress(runId, `[native] phase=${info.phase} → assembling prompt (native builder)`, {
+    // 役割別プロバイダー解決
+    const effectiveProvider = resolveProvider(info.phase, provider, providers);
+
+    const providerNote = effectiveProvider !== provider
+      ? ` (role override: ${effectiveProvider})`
+      : '';
+    this.progress(runId, `[native] phase=${info.phase} provider=${effectiveProvider}${providerNote} → assembling prompt`, {
       phase: info.phase,
+      provider: effectiveProvider,
     });
     const prompt = this.getPrompt(runId);
 
@@ -452,7 +485,7 @@ export class NativeApsfExecutor extends EventEmitter {
     const mtimeBefore = fs.existsSync(targetPath) ? fs.statSync(targetPath).mtimeMs : null;
     const hadContentBefore = new PhaseDetector(runDir).hasAnyContent(info.fileToWrite);
 
-    const output = await this.invokeAI(runId, info.phase, prompt, provider, timeoutMs);
+    const output = await this.invokeAI(runId, info.phase, prompt, effectiveProvider, timeoutMs);
 
     // ツール有効の BUILD では、AI が対象ファイル（build.md）を直接書き込む
     // ことがある（codex workspace-write / ps1 時代の claude build と同じ流儀）。
@@ -500,7 +533,7 @@ export class NativeApsfExecutor extends EventEmitter {
   async executeLoop(opts: NativeExecuteOptions): Promise<{ phase: string; cycles: number; stopReason: string }> {
     return this.withTranscript(
       opts.runId,
-      { command: 'full-cycle', provider: opts.provider, dryRun: Boolean(opts.dryRun) },
+      { command: 'full-cycle', provider: opts.provider, ...(opts.providers ? { providers: opts.providers } : {}), dryRun: Boolean(opts.dryRun) },
       () => {
         if (opts.dryRun) return this.loopCore(opts);
         // ループ全体を 1 つの実行マーカーで包む（サイクル間のクラッシュも回復対象）

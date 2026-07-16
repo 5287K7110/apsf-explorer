@@ -21,6 +21,13 @@ export interface ApsfExecuteResponse {
 
 export type ApsfCommand = 'plan' | 'build' | 'review' | 'full-cycle';
 
+/** 役割別プロバイダー指定（未指定の役割は provider にフォールバック） */
+export interface RoleProviders {
+  plan?: 'claude' | 'codex';
+  build?: 'claude' | 'codex';
+  review?: 'claude' | 'codex';
+}
+
 export interface ApsfPhaseInfo {
   runId: string;
   phase: string;
@@ -159,13 +166,17 @@ export const apsfAPI = {
     runId: string,
     command: ApsfCommand,
     provider: 'claude' | 'codex',
-    dryRun = false
+    dryRun = false,
+    providers?: RoleProviders
   ): Promise<ApsfExecuteResponse> {
+    // providers が全キー未指定（= 既定と同じ）なら送らない（後方互換）
+    const hasProviders = providers && Object.values(providers).some(Boolean);
     return apiClient.post<ApsfExecuteResponse>(
       `/runs/${encodeURIComponent(runId)}/execute`,
       {
         command,
         provider,
+        ...(hasProviders ? { providers } : {}),
         roles: [],
         mode: 'apsf-run',
         context: dryRun ? { dryRun: true } : undefined,

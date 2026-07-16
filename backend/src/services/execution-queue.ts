@@ -44,16 +44,18 @@ async function runExecution(entry: QueueEntry, executor: NativeApsfExecutor): Pr
   const { request, emitter, apsfRoot } = entry;
   try {
     const provider = request.provider === 'codex' ? 'codex' : 'claude';
+    const providers = request.providers;
     const dryRun = Boolean(request.context?.dryRun);
     const isLoop = request.command === 'full-cycle';
 
     console.log(
-      `[APSF-RUN] native ${isLoop ? 'auto-loop' : 'single-phase'} ${request.runId}${dryRun ? ' (DryRun)' : ''}`
+      `[APSF-RUN] native ${isLoop ? 'auto-loop' : 'single-phase'} ${request.runId}${dryRun ? ' (DryRun)' : ''}` +
+        (providers ? ` providers=${JSON.stringify(providers)}` : '')
     );
 
     executor.on('event', (event: StreamEvent) => emitter.emit('event', event));
 
-    const opts = { runId: request.runId, provider, dryRun } as const;
+    const opts = { runId: request.runId, provider, providers, dryRun } as const;
     let phase: string;
     let detail: Record<string, unknown> = {};
 

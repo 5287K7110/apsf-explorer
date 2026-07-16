@@ -27,7 +27,7 @@ router.use(authenticateToken);
  */
 router.post('/:id/execute', async (req: Request, res: Response) => {
   try {
-    const { command, provider, roles, goal, context, mode } = req.body;
+    const { command, provider, providers, roles, goal, context, mode } = req.body;
     const runId = req.params.id;
 
     // Validation
@@ -53,6 +53,7 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       runId,
       command,
       provider,
+      ...(providers && typeof providers === 'object' ? { providers } : {}),
       roles: roles || [],
       goal,
       context,

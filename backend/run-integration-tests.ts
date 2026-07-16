@@ -626,7 +626,7 @@ async function main(): Promise<void> {
       const w = await fetch(`${BASE}/api/runs/apsf/${runName}/write-phase`, {
         method: 'POST',
         headers: authHeader(),
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, allowAutoOwned: true }),
       });
       const body = await w.json();
       assert(w.status === 200, `write ${file} failed: ${JSON.stringify(body).slice(0, 200)}`);

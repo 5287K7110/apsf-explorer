@@ -1,6 +1,13 @@
 // Provider Types
 export type ProviderType = 'claude' | 'codex' | 'gemini';
 
+/** 役割別プロバイダー指定（未指定の役割は provider にフォールバック） */
+export interface RoleProviders {
+  plan?: ProviderType;
+  build?: ProviderType;
+  review?: ProviderType;
+}
+
 export interface ProviderConfig {
   type: ProviderType;
   apiKey: string;
@@ -12,6 +19,8 @@ export interface ExecuteRequest {
   runId: string;
   command: 'plan' | 'build' | 'review' | 'judge' | 'retry' | 'full-cycle';
   provider: ProviderType;
+  /** 役割別プロバイダー（未指定の役割は provider にフォールバック） */
+  providers?: RoleProviders;
   roles: string[];
   goal?: string;
   context?: Record<string, unknown>;

@@ -102,6 +102,10 @@ export const APSFRunPanel: React.FC = () => {
               onCommandChange={h.setCommand}
               provider={h.provider}
               onProviderChange={h.setProvider}
+              roleProviders={h.roleProviders}
+              onRoleProvidersChange={h.setRoleProviders}
+              showRoleProviders={h.showRoleProviders}
+              onShowRoleProvidersChange={h.setShowRoleProviders}
               dryRun={h.dryRun}
               onDryRunChange={h.setDryRun}
               selectedActive={h.selectedActive}

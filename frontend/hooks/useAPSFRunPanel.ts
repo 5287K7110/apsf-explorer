@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision, ApsfExecutionMeta,
+  RoleProviders,
 } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
 
@@ -24,6 +25,8 @@ export function useAPSFRunPanel() {
   const [phaseLoading, setPhaseLoading] = useState(false);
   const [command, setCommand] = useState<ApsfCommand>('plan');
   const [provider, setProvider] = useState<'claude' | 'codex'>('claude');
+  const [roleProviders, setRoleProviders] = useState<RoleProviders>({});
+  const [showRoleProviders, setShowRoleProviders] = useState(false);
   const [dryRun, setDryRun] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
@@ -230,9 +233,16 @@ export function useAPSFRunPanel() {
   const handleExecute = async () => {
     if (!selected || selectedActive || submitting) return;
     setSubmitting(true);
-    appendLog('info', `実行要求: ${command} (provider=${provider}${dryRun ? ', DryRun' : ''})`);
+    const hasRoleProviders = showRoleProviders && Object.values(roleProviders).some(Boolean);
+    const rpSummary = hasRoleProviders
+      ? `, providers=${JSON.stringify(roleProviders)}`
+      : '';
+    appendLog('info', `実行要求: ${command} (provider=${provider}${rpSummary}${dryRun ? ', DryRun' : ''})`);
     try {
-      await apsfAPI.execute(selected, command, provider, dryRun);
+      await apsfAPI.execute(
+        selected, command, provider, dryRun,
+        hasRoleProviders ? roleProviders : undefined
+      );
     } catch (e) {
       appendLog('error', e instanceof Error ? e.message : 'execute request failed');
     } finally {
@@ -367,7 +377,9 @@ export function useAPSFRunPanel() {
     // Phase
     phase, phaseLoading, phaseStatus, lastError, fileToWrite, nextRole, existingFiles, detectPhase,
     // Execution
-    command, setCommand, provider, setProvider, dryRun, setDryRun,
+    command, setCommand, provider, setProvider,
+    roleProviders, setRoleProviders, showRoleProviders, setShowRoleProviders,
+    dryRun, setDryRun,
     submitting, selectedActive, handleExecute,
     // Queue
     queueState, handleCancelQueued,

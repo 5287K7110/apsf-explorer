@@ -1,12 +1,16 @@
 import React from 'react';
-import { Loader2, Play } from 'lucide-react';
-import { ApsfCommand } from '../../services/apsfAPI';
+import { Loader2, Play, ChevronDown, ChevronRight } from 'lucide-react';
+import { ApsfCommand, RoleProviders } from '../../services/apsfAPI';
 
 interface Props {
   command: ApsfCommand;
   onCommandChange: (v: ApsfCommand) => void;
   provider: 'claude' | 'codex';
   onProviderChange: (v: 'claude' | 'codex') => void;
+  roleProviders: RoleProviders;
+  onRoleProvidersChange: (v: RoleProviders) => void;
+  showRoleProviders: boolean;
+  onShowRoleProvidersChange: (v: boolean) => void;
   dryRun: boolean;
   onDryRunChange: (v: boolean) => void;
   selectedActive: boolean;
@@ -16,8 +20,15 @@ interface Props {
   selected: string;
 }
 
+const ROLE_LABELS: { key: keyof RoleProviders; label: string }[] = [
+  { key: 'plan', label: 'Planner' },
+  { key: 'build', label: 'Builder' },
+  { key: 'review', label: 'Critic' },
+];
+
 export const ExecutionControls: React.FC<Props> = ({
   command, onCommandChange, provider, onProviderChange,
+  roleProviders, onRoleProvidersChange, showRoleProviders, onShowRoleProvidersChange,
   dryRun, onDryRunChange, selectedActive, submitting,
   onExecute, queueState, selected,
 }) => (
@@ -43,6 +54,15 @@ export const ExecutionControls: React.FC<Props> = ({
         <option value="claude">claude</option>
         <option value="codex">codex</option>
       </select>
+      <button
+        type="button"
+        onClick={() => onShowRoleProvidersChange(!showRoleProviders)}
+        className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+        data-testid="apsf-role-providers-toggle"
+      >
+        {showRoleProviders ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        役割別
+      </button>
       <label className="flex items-center gap-2 text-sm text-slate-300">
         <input
           type="checkbox"
@@ -66,6 +86,30 @@ export const ExecutionControls: React.FC<Props> = ({
             : 'Execute'}
       </button>
     </div>
+    {showRoleProviders && (
+      <div className="flex items-center gap-4 pl-2 text-xs text-slate-400" data-testid="apsf-role-providers">
+        {ROLE_LABELS.map(({ key, label }) => (
+          <label key={key} className="flex items-center gap-1">
+            <span className="w-14">{label}:</span>
+            <select
+              value={roleProviders[key] || ''}
+              onChange={(e) =>
+                onRoleProvidersChange({
+                  ...roleProviders,
+                  [key]: e.target.value || undefined,
+                })
+              }
+              className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
+              data-testid={`apsf-role-provider-${key}`}
+            >
+              <option value="">(既定)</option>
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+            </select>
+          </label>
+        ))}
+      </div>
+    )}
     {!dryRun && (
       <p className="text-xs text-amber-400">
         ⚠ 実 AI を起動します（トークン消費・時間がかかります）
