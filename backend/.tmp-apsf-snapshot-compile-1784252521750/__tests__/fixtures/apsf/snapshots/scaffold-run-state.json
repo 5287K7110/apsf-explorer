@@ -1,0 +1,13 @@
+{
+  "active_handoff_id": "",
+  "current_owner": "Human",
+  "current_phase": "TASK_NEEDED",
+  "error_timestamp": "",
+  "gate_failures": [],
+  "last_error": "",
+  "phase_entered_at": "__NORMALIZED__",
+  "phase_status": "pending",
+  "retry_count": 0,
+  "run_id": "__NORMALIZED__",
+  "run_type": "light"
+}

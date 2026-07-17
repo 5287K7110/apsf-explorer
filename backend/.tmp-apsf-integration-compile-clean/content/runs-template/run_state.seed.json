@@ -1,0 +1,17 @@
+{
+  "_template_note": "Seed for run_state.json, used by the MANUAL run-creation path (cp -r runs/_template runs/work/<run-name>): rename this file to run_state.json, fill in the FILL_IN_* placeholders, and delete all _*_note keys. If you used `apsf init-run`, a real run_state.json is created for you — just delete this copied seed. This file is intentionally NOT named run_state.json (see framework/SYNC_GOVERNANCE.md, 'Special case: run_state.json'). Canonical schema: src/apsf/core/state/run_state.py (RunState). Unknown _-prefixed fields are ignored by the parser (forward compatible).",
+  "run_id": "FILL_IN_RUN_DIRECTORY_NAME (e.g. 2026-07-02-002_case-key_topic — must match the directory name exactly)",
+  "run_type": "heavy",
+  "_run_type_note": "heavy | light. Light runs use task.md instead of goal/plan (see framework/templates/run_light_template.md).",
+  "current_phase": "GOAL_NEEDED",
+  "_current_phase_note": "Initial phase for a fresh heavy run is GOAL_NEEDED (light run: TASK_NEEDED). Full phase list and valid transitions: src/apsf/core/state/transition_service.py — GOAL_NEEDED, SETUP_NEEDED, PLAN_NEEDED, IMPROVE_PLAN_OPTIONAL, BUILD_NEEDED, REVIEW_NEEDED, IMPROVE_NEEDED, VERIFY_OPTIONAL, RESULT_NEEDED, TRANSCRIPT_RECOMMENDED, COMPLETE.",
+  "phase_status": "pending",
+  "_phase_status_note": "pending | in_progress | completed | failed (PhaseStatus enum).",
+  "current_owner": "Human",
+  "_current_owner_note": "Default owner per phase: GOAL_NEEDED=Human, PLAN_NEEDED=Planner, BUILD_NEEDED=Builder, REVIEW_NEEDED=Critic, IMPROVE_NEEDED=Human/Judge. Use \"(none)\" when closed.",
+  "retry_count": 0,
+  "last_error": "",
+  "active_handoff_id": "",
+  "gate_failures": [],
+  "phase_entered_at": "FILL_IN_ISO_TIMESTAMP (e.g. 2026-07-02T09:00:00+09:00)"
+}

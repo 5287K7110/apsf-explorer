@@ -1,5 +1,6 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { CopyButton } from './CopyButton';
 import type { LogLine } from '../../hooks/useAPSFRunPanel';
 import type { ApsfExecutionMeta } from '../../services/apsfAPI';
 
@@ -66,6 +67,12 @@ export const LogPane: React.FC<Props> = ({
         {viewTranscript && (
           <span className="text-xs text-slate-500">過去の実行トランスクリプト（読み取り専用）</span>
         )}
+        <span className="ml-auto">
+          <CopyButton
+            getText={() => displayLogs.map((l) => l.text).join('\n')}
+            title="表示中のログ全文をコピー"
+          />
+        </span>
       </div>
       <div className="p-4 max-h-80 overflow-y-auto font-mono text-xs" data-testid="apsf-log">
         {transcriptLoading ? (

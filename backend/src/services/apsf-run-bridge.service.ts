@@ -15,6 +15,10 @@ import {
   type TranscriptEvent,
 } from './apsf-native/execution-transcript.js';
 import {
+  PTYPE_TO_SPECIALIST,
+  CTYPE_TO_SPECIALIST,
+} from './apsf-native/specialist-registry.js';
+import {
   enqueue,
   cancelExecution,
   listExecuting,
@@ -65,6 +69,27 @@ export const PHASE_FILES = [
   'plan_review.md', 'build_review.md', 'review_review.md', 'improve_review.md',
   'model-assignment.md',
 ] as const;
+
+function validateExecuteSpecialists(specialists: ExecuteRequest['specialists']): string | null {
+  if (!specialists) return null;
+  const checks = [
+    { role: 'planner', value: specialists.planner as unknown, valid: Object.keys(PTYPE_TO_SPECIALIST).sort() },
+    { role: 'critic', value: specialists.critic as unknown, valid: Object.keys(CTYPE_TO_SPECIALIST).sort() },
+  ] as const;
+
+  for (const check of checks) {
+    if (check.value === undefined || check.value === null) continue;
+    if (typeof check.value !== 'string' || !check.value.trim()) {
+      return `Invalid ${check.role} specialist code '${String(check.value)}'. Valid ${check.role} codes: ${check.valid.join(', ')}`;
+    }
+    const code = check.value.trim().toUpperCase();
+    if (!check.valid.includes(code)) {
+      return `Invalid ${check.role} specialist code '${check.value}'. Valid ${check.role} codes: ${check.valid.join(', ')}`;
+    }
+  }
+
+  return null;
+}
 
 export class APSFRunBridge extends EventEmitter {
 
@@ -177,6 +202,11 @@ export class APSFRunBridge extends EventEmitter {
     }
     if (!RUN_NAME_RE.test(request.runId)) {
       this.emitError(request.runId, `Invalid run name: ${request.runId}`);
+      return;
+    }
+    const specialistError = validateExecuteSpecialists(request.specialists);
+    if (specialistError) {
+      this.emitError(request.runId, specialistError);
       return;
     }
     enqueue({ request, emitter: this, apsfRoot: this.apsfRoot });

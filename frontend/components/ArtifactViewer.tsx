@@ -3,6 +3,7 @@ import { FileText, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apsfAPI } from '../services/apsfAPI';
+import { CopyButton } from './apsf/CopyButton';
 
 /**
  * 成果物ビューア — run の phase ファイルを Markdown レンダリングで読む
@@ -71,9 +72,14 @@ export const ArtifactViewer: React.FC<Props> = ({ runId, existingFiles }) => {
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4" data-testid="apsf-artifacts">
-      <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
-        <FileText size={14} /> Artifacts
-      </h4>
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+          <FileText size={14} /> Artifacts
+        </h4>
+        {selected && !loading && !error && (
+          <CopyButton getText={() => content} title={`${selected} をコピー`} />
+        )}
+      </div>
       <div className="flex flex-wrap gap-1.5 mb-3">
         {files.map((f) => (
           <button

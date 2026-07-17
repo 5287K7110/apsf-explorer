@@ -1,0 +1,13 @@
+{
+  "recommendation": "Accept",
+  "human_owned_blocker": false,
+  "human_owned_blocker_state": "valid",
+  "advisory_source": "judge_structured",
+  "run_id": "__NORMALIZED__",
+  "generated_at": "__NORMALIZED__",
+  "phase": "IMPROVE_NEEDED",
+  "ownership_status": "UNRECORDED",
+  "ownership_detail": "transition outcome record not found for run '2099-01-01-998_work_snap-wp'",
+  "source": "write-phase review completion",
+  "freshness_token": "__NORMALIZED__"
+}

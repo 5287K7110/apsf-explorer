@@ -10,6 +10,10 @@ import { executionEvents } from '../services/event-bus.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
 import { workdirGitDiff } from '../services/apsf-native/workdir-git.js';
+import {
+  PTYPE_TO_SPECIALIST,
+  CTYPE_TO_SPECIALIST,
+} from '../services/apsf-native/specialist-registry.js';
 import { proposeSplit, type SplitProposal } from '../services/split-planner.js';
 import { PhaseDetector } from '../services/apsf-native/phase-detector.js';
 import { type ExecutionMode } from '../types/execution-mode.js';
@@ -19,6 +23,32 @@ const apsfRun = new APSFRunBridge();
 const modeRouter = new ExecutionModeRouter(
   (process.env.EXECUTION_MODE as ExecutionMode) || 'cli-full'
 );
+
+function validateExecuteSpecialists(specialists: unknown): string | null {
+  if (specialists === undefined || specialists === null) return null;
+  if (typeof specialists !== 'object' || Array.isArray(specialists)) {
+    return 'specialists must be an object with optional planner and critic fields';
+  }
+
+  const input = specialists as { planner?: unknown; critic?: unknown };
+  const checks = [
+    { role: 'planner', value: input.planner, valid: Object.keys(PTYPE_TO_SPECIALIST).sort() },
+    { role: 'critic', value: input.critic, valid: Object.keys(CTYPE_TO_SPECIALIST).sort() },
+  ] as const;
+
+  for (const check of checks) {
+    if (check.value === undefined || check.value === null) continue;
+    if (typeof check.value !== 'string' || !check.value.trim()) {
+      return `Invalid ${check.role} specialist code '${String(check.value)}'. Valid ${check.role} codes: ${check.valid.join(', ')}`;
+    }
+    const code = check.value.trim().toUpperCase();
+    if (!check.valid.includes(code)) {
+      return `Invalid ${check.role} specialist code '${check.value}'. Valid ${check.role} codes: ${check.valid.join(', ')}`;
+    }
+  }
+
+  return null;
+}
 
 // Middleware
 router.use(authenticateToken);
@@ -30,7 +60,7 @@ router.use(authenticateToken);
  */
 router.post('/:id/execute', async (req: Request, res: Response) => {
   try {
-    const { command, provider, providers, roles, goal, context, mode } = req.body;
+    const { command, provider, providers, specialists, roles, goal, context, mode } = req.body;
     const runId = req.params.id;
 
     // Validation
@@ -38,6 +68,12 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       res.status(400).json({
         error: 'command and provider are required',
       });
+      return;
+    }
+
+    const specialistError = validateExecuteSpecialists(specialists);
+    if (specialistError) {
+      res.status(400).json({ error: specialistError });
       return;
     }
 
@@ -57,6 +93,7 @@ router.post('/:id/execute', async (req: Request, res: Response) => {
       command,
       provider,
       ...(providers && typeof providers === 'object' ? { providers } : {}),
+      ...(specialists && typeof specialists === 'object' ? { specialists } : {}),
       roles: roles || [],
       goal,
       context,

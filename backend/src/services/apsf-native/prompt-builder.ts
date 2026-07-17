@@ -13,6 +13,7 @@ import {
   resolveCriticSpecialist,
   type SpecialistSelection,
 } from './specialist-registry.js';
+import { type ExecuteSpecialists } from '../../types/index.js';
 
 /** renderer.py _section の忠実移植 */
 function section(title: string, content: string): string {
@@ -194,9 +195,39 @@ function selectionNote(
  * 現在フェーズのプロンプトを組み立てる（act_service._build_prompt）
  * @param frameworkRoot specialist 定義（framework/agents/）のルート
  */
-export function buildPhasePrompt(runDir: string, frameworkRoot: string): {
+/** ログ表示用の specialist 選択概要 */
+export interface SpecialistSummary {
+  kind: 'Planner' | 'Critic';
+  ptype: string;
+  file: string | null;
+  mode: string;
+  reason: string;
+}
+
+export interface BuildPhasePromptOptions {
+  specialists?: ExecuteSpecialists;
+}
+
+function specialistSummary(
+  kind: 'Planner' | 'Critic',
+  selection: SpecialistSelection,
+  frameworkRoot: string
+): SpecialistSummary {
+  return {
+    kind,
+    ptype: selection.ptype || '(generic)',
+    file: selection.specialistPath
+      ? path.relative(frameworkRoot, selection.specialistPath).split(path.sep).join('/')
+      : null,
+    mode: selection.mode,
+    reason: selection.reason,
+  };
+}
+
+export function buildPhasePrompt(runDir: string, frameworkRoot: string, opts: BuildPhasePromptOptions = {}): {
   phase: string;
   prompt: string;
+  specialist?: SpecialistSummary;
 } {
   const detector = new PhaseDetector(runDir);
   const info = detector.detect();
@@ -207,10 +238,14 @@ export function buildPhasePrompt(runDir: string, frameworkRoot: string): {
     case 'PLAN_NEEDED': {
       const assignmentContent = get('execution-assignment.md');
       const goalContent = get('goal.md');
-      const selection = resolvePlannerSpecialist(goalContent, assignmentContent, frameworkRoot);
+      const explicitAssignment = opts.specialists?.planner
+        ? `P-TYPE: ${opts.specialists.planner}`
+        : assignmentContent;
+      const selection = resolvePlannerSpecialist(goalContent, explicitAssignment, frameworkRoot);
       const note = selectionNote(selection, frameworkRoot, 'P');
       return {
         phase: info.phase,
+        specialist: specialistSummary('Planner', selection, frameworkRoot),
         prompt: renderPlanPrompt({
           goalContent,
           specialistContent: selection.specialistContent,
@@ -236,10 +271,14 @@ export function buildPhasePrompt(runDir: string, frameworkRoot: string): {
       const assignmentContent = get('execution-assignment.md');
       // Light run fallback: goal.md がなければ task.md
       const goalContent = get('goal.md') || get('task.md');
-      const selection = resolveCriticSpecialist(goalContent, assignmentContent, frameworkRoot);
+      const explicitAssignment = opts.specialists?.critic
+        ? `C-TYPE: ${opts.specialists.critic}`
+        : assignmentContent;
+      const selection = resolveCriticSpecialist(goalContent, explicitAssignment, frameworkRoot);
       const note = selectionNote(selection, frameworkRoot, 'C');
       return {
         phase: info.phase,
+        specialist: specialistSummary('Critic', selection, frameworkRoot),
         prompt: renderReviewPrompt({
           goalContent,
           buildContent: get('build.md'),

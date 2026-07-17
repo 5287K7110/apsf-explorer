@@ -24,13 +24,14 @@ import { transition, atomicWrite, setPhaseStatus } from './run-state.js';
 import { TranscriptWriter } from './execution-transcript.js';
 import { resolveFrameworkRoot } from './content-root.js';
 import { workdirGitStatus, workdirGitDiff, dirtySummary } from './workdir-git.js';
-import { type StreamEvent, type RoleProviders } from '../../types/index.js';
+import { type StreamEvent, type RoleProviders, type ExecuteSpecialists } from '../../types/index.js';
 
 export interface NativeExecuteOptions {
   runId: string;
   provider: 'claude' | 'codex';
   /** 役割別プロバイダー（未指定の役割は provider にフォールバック） */
   providers?: RoleProviders;
+  specialists?: ExecuteSpecialists;
   maxCycles?: number;
   dryRun?: boolean;
   timeoutMs?: number;
@@ -259,10 +260,18 @@ export class NativeApsfExecutor extends EventEmitter {
   }
 
   /** フェーズプロンプトの組み立て（TS ネイティブ・renderer parity 検証済み） */
-  private getPrompt(runId: string): string {
+  private getPrompt(runId: string, specialists?: ExecuteSpecialists): { prompt: string; specialistNote: string | null } {
     const runDir = resolveRunDir(this.apsfRoot, runId);
     if (!runDir) throw new Error(`Run not found: ${runId}`);
-    return buildPhasePrompt(runDir, resolveFrameworkRoot(this.apsfRoot)).prompt;
+    const built = buildPhasePrompt(runDir, resolveFrameworkRoot(this.apsfRoot), { specialists });
+    const s = built.specialist;
+    return {
+      prompt: built.prompt,
+      // 例: [native] specialist: Critic C-08 (framework/agents/critics/puzzle-difficulty-critic.md, inferred — scope hits: ...)
+      specialistNote: s
+        ? `[native] specialist: ${s.kind} ${s.ptype}${s.file ? ` (${s.file})` : ''} — ${s.mode}: ${s.reason}`
+        : null,
+    };
   }
 
   /** AI CLI でプロンプトを実行（BUILD はツール有効） */
@@ -493,7 +502,7 @@ export class NativeApsfExecutor extends EventEmitter {
   }
 
   private async executePhaseCore(opts: NativeExecuteOptions): Promise<string> {
-    const { runId, provider, providers, dryRun, timeoutMs = defaultExecTimeoutMs() } = opts;
+    const { runId, provider, providers, specialists, dryRun, timeoutMs = defaultExecTimeoutMs() } = opts;
     const info = this.detectPhase(runId);
 
     if (isHumanPhase(info.phase)) {
@@ -516,7 +525,10 @@ export class NativeApsfExecutor extends EventEmitter {
       phase: info.phase,
       provider: effectiveProvider,
     });
-    const prompt = this.getPrompt(runId);
+    const { prompt, specialistNote } = this.getPrompt(runId, specialists);
+    if (specialistNote) {
+      this.progress(runId, specialistNote, { phase: info.phase });
+    }
 
     if (dryRun) {
       this.progress(runId, `[native] DryRun — prompt assembled (${prompt.length} chars). Not executing AI.`, {

@@ -45,6 +45,7 @@ async function runExecution(entry: QueueEntry, executor: NativeApsfExecutor): Pr
   try {
     const provider = request.provider === 'codex' ? 'codex' : 'claude';
     const providers = request.providers;
+    const specialists = request.specialists;
     const dryRun = Boolean(request.context?.dryRun);
     const isLoop = request.command === 'full-cycle';
 
@@ -55,7 +56,7 @@ async function runExecution(entry: QueueEntry, executor: NativeApsfExecutor): Pr
 
     executor.on('event', (event: StreamEvent) => emitter.emit('event', event));
 
-    const opts = { runId: request.runId, provider, providers, dryRun } as const;
+    const opts = { runId: request.runId, provider, providers, specialists, dryRun } as const;
     let phase: string;
     let detail: Record<string, unknown> = {};
 

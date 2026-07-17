@@ -8,6 +8,11 @@ export interface RoleProviders {
   review?: ProviderType;
 }
 
+export interface ExecuteSpecialists {
+  planner?: string;
+  critic?: string;
+}
+
 export interface ProviderConfig {
   type: ProviderType;
   apiKey: string;
@@ -21,6 +26,7 @@ export interface ExecuteRequest {
   provider: ProviderType;
   /** 役割別プロバイダー（未指定の役割は provider にフォールバック） */
   providers?: RoleProviders;
+  specialists?: ExecuteSpecialists;
   roles: string[];
   goal?: string;
   context?: Record<string, unknown>;

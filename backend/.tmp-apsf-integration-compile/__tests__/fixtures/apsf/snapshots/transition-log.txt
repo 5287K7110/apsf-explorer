@@ -1,0 +1,4 @@
+TASK_NEEDED → write(task.md) → BUILD_NEEDED
+BUILD_NEEDED → write(build.md) → REVIEW_NEEDED
+REVIEW_NEEDED → write(review.md) → IMPROVE_NEEDED
+IMPROVE_NEEDED → write(improve.md) → RESULT_NEEDED
