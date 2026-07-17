@@ -259,9 +259,12 @@ export class APSFRunBridge extends EventEmitter {
    */
   async createRun(
     runName: string,
-    options: { light?: boolean; taxonomy?: string; workdir?: string } = {}
+    options: { light?: boolean; taxonomy?: string; workdir?: string; parentRun?: string } = {}
   ): Promise<void> {
     this.assertRunName(runName);
+    if (options.parentRun) {
+      this.assertRunName(options.parentRun);
+    }
     if (options.taxonomy && !['fw-improvement', 'work'].includes(options.taxonomy)) {
       throw new Error(`Invalid taxonomy: ${options.taxonomy}`);
     }
@@ -277,12 +280,15 @@ export class APSFRunBridge extends EventEmitter {
       light: options.light,
       taxonomy: options.taxonomy as 'fw-improvement' | 'work' | undefined,
     });
-    if (workdir) {
+    const config: { target_workdir?: string; parent_run?: string } = {};
+    if (workdir) config.target_workdir = workdir;
+    if (options.parentRun) config.parent_run = options.parentRun;
+    if (Object.keys(config).length > 0) {
       const runDir = resolveRunDir(this.apsfRoot, runName);
       if (runDir) {
         fs.writeFileSync(
           path.join(runDir, 'run_config.json'),
-          JSON.stringify({ target_workdir: workdir }, null, 2),
+          JSON.stringify(config, null, 2),
           'utf-8'
         );
       }

@@ -564,6 +564,88 @@ async function main(): Promise<void> {
       assert(r.status === 400, `expected 400, got ${r.status}`);
     });
 
+    await test('APSF: split-apply creates numbered sub-runs with parent metadata', async () => {
+      const { existsSync, readFileSync, rmSync } = await import('fs');
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const now = new Date();
+      const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const stamp = Date.now();
+      const parentRun = `${today}_split-parent-${stamp}`;
+      const parentDir = resolve(apsfRoot, 'runs/work', parentRun);
+      const createdRuns: string[] = [];
+
+      const proposals = [
+        {
+          name: `split-alpha-${stamp}`,
+          task:
+            '# Task\n\n## What\n\nImplement alpha split coverage.\n\n' +
+            '## Context\n\n- Parent task is being split.\n- This sub-run owns alpha work.\n\n' +
+            '## Done Criteria\n\n- [ ] Alpha work is complete.\n- [ ] Metadata is present.\n',
+        },
+        {
+          name: `split-beta-${stamp}`,
+          task:
+            '# Task\n\n## What\n\nImplement beta split coverage.\n\n' +
+            '## Context\n\n- Parent task is being split.\n- This sub-run owns beta work.\n\n' +
+            '## Done Criteria\n\n- [ ] Beta work is complete.\n- [ ] Metadata is present.\n',
+        },
+      ];
+
+      rmSync(parentDir, { recursive: true, force: true });
+      try {
+        const create = await fetch(`${BASE}/api/runs/apsf`, {
+          method: 'POST',
+          headers: authHeader(),
+          body: JSON.stringify({
+            runName: parentRun,
+            light: true,
+            taxonomy: 'work',
+            workdir: __dirname,
+          }),
+        });
+        const createBody = await create.json();
+        assert(create.status === 200, `create failed: ${JSON.stringify(createBody).slice(0, 200)}`);
+
+        for (let i = 0; i < 2; i++) {
+          const apply = await fetch(`${BASE}/api/runs/apsf/${encodeURIComponent(parentRun)}/split-apply`, {
+            method: 'POST',
+            headers: authHeader(),
+            body: JSON.stringify({ runs: proposals }),
+          });
+          const body = await apply.json();
+          assert(apply.status === 200, `split-apply failed: ${JSON.stringify(body).slice(0, 300)}`);
+          assert(Array.isArray(body.created) && body.created.length === 2, `created: ${JSON.stringify(body.created)}`);
+          assert(Array.isArray(body.errors) && body.errors.length === 0, `errors: ${JSON.stringify(body.errors)}`);
+          createdRuns.push(...body.created);
+        }
+
+        assert(new Set(createdRuns).size === 4, `duplicate sub-run names: ${createdRuns.join(', ')}`);
+        assert(
+          createdRuns.every((name) => new RegExp(`^${today}-\\d{3}_split-(alpha|beta)-${stamp}$`).test(name)),
+          `unexpected sub-run names: ${createdRuns.join(', ')}`
+        );
+
+        const suffixes = createdRuns.map((name) => Number(name.slice(today.length + 1, today.length + 4)));
+        const sortedSuffixes = [...suffixes].sort((a, b) => a - b);
+        for (let i = 1; i < sortedSuffixes.length; i++) {
+          assert(sortedSuffixes[i] > sortedSuffixes[i - 1], `suffixes not unique: ${suffixes.join(', ')}`);
+        }
+
+        for (const runName of createdRuns) {
+          const configPath = resolve(apsfRoot, 'runs/work', runName, 'run_config.json');
+          assert(existsSync(configPath), `missing config: ${configPath}`);
+          const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+          assert(cfg.parent_run === parentRun, `parent_run mismatch for ${runName}: ${cfg.parent_run}`);
+          assert(cfg.target_workdir === __dirname, `target_workdir mismatch for ${runName}: ${cfg.target_workdir}`);
+        }
+      } finally {
+        rmSync(parentDir, { recursive: true, force: true });
+        for (const runName of createdRuns) {
+          rmSync(resolve(apsfRoot, 'runs/work', runName), { recursive: true, force: true });
+        }
+      }
+    });
+
     await test('APSF: double execution of same run is rejected', async () => {
       const { APSFRunBridge } = await import('./src/services/apsf-run-bridge.service.js');
       const { rmSync: rmRun } = await import('fs');

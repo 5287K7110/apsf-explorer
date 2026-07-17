@@ -26,6 +26,30 @@ const modeRouter = new ExecutionModeRouter(
   (process.env.EXECUTION_MODE as ExecutionMode) || 'cli-full'
 );
 
+function localDateString(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function createBranchAllocator(existingRuns: string[], date: string): () => string {
+  const used = new Set<number>();
+  const re = new RegExp(`^${date}-(\\d{3})_`);
+  for (const run of existingRuns) {
+    const match = run.match(re);
+    if (match) used.add(Number(match[1]));
+  }
+
+  return () => {
+    for (let seq = 1; seq <= 999; seq++) {
+      if (used.has(seq)) continue;
+      used.add(seq);
+      return String(seq).padStart(3, '0');
+    }
+    throw new Error(`No available sub-run branch numbers for ${date}`);
+  };
+}
+
 function validateExecuteSpecialists(specialists: unknown): string | null {
   if (specialists === undefined || specialists === null) return null;
   if (typeof specialists !== 'object' || Array.isArray(specialists)) {
@@ -334,8 +358,13 @@ router.post('/apsf/:id/split-apply', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'runs (array of 1-8 {name, task}) is required' });
       return;
     }
+    if (!apsfRun.getRunDir(req.params.id)) {
+      res.status(404).json({ error: `Run not found: ${req.params.id}` });
+      return;
+    }
     const parentWorkdir = apsfRun.getTargetWorkdir(req.params.id);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateString();
+    const nextBranch = createBranchAllocator(apsfRun.listRuns(), today);
     const created: string[] = [];
     const errors: string[] = [];
     for (const r of runs) {
@@ -344,7 +373,7 @@ router.post('/apsf/:id/split-apply', async (req: Request, res: Response) => {
         errors.push(`invalid name: ${r.name}`);
         continue;
       }
-      const runName = `${today}_${name}`;
+      const runName = `${today}-${nextBranch()}_${name}`;
       if (PhaseDetector.countMeaningfulLines(String(r.task ?? '')) <= 3) {
         errors.push(
           `${runName}: task body too thin (needs more than 3 meaningful lines — ` +
@@ -356,7 +385,8 @@ router.post('/apsf/:id/split-apply', async (req: Request, res: Response) => {
         await apsfRun.createRun(runName, {
           light: true,
           taxonomy: 'work',
-          workdir: parentWorkdir !== process.env.APSF_ROOT ? parentWorkdir : undefined,
+          workdir: parentWorkdir,
+          parentRun: req.params.id,
         });
         await apsfRun.writePhase(runName, String(r.task ?? ''), { filename: 'task.md' });
         created.push(runName);
