@@ -41,3 +41,6 @@ coverage/
 playwright-report/
 test-results/
 .claude/settings.local.json
+
+# テストスクリプトの一時コンパイル出力
+.tmp-apsf-*/

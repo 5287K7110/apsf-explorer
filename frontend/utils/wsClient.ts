@@ -32,19 +32,40 @@ export class WSClient {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private intentionalClose = false;
+  private connectPromise: Promise<void> | null = null;
 
   constructor(url: string) {
     this.url = url;
   }
 
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    // ── 多重接続ガード ──
+    // App と Header など複数のコンポーネントが connect() を呼んでも、ソケットは
+    // 常に 1 本に保つ。2 本張られると同じリスナー群に二重配信され、
+    // ログが全行 2 回表示されるバグになる（dogfooding で発見）。
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return Promise.resolve();
+    }
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+    this.connectPromise = new Promise((resolve, reject) => {
       // 4401 が onopen 前に来た場合でも promise が必ず決着するようにする
       let settled = false;
-      const settleResolve = () => { if (!settled) { settled = true; resolve(); } };
-      const settleReject = (e: unknown) => { if (!settled) { settled = true; reject(e); } };
+      const settleResolve = () => { if (!settled) { settled = true; this.connectPromise = null; resolve(); } };
+      const settleReject = (e: unknown) => { if (!settled) { settled = true; this.connectPromise = null; reject(e); } };
       try {
         this.intentionalClose = false;
+        // 死にかけの古いソケットが残っていれば、ハンドラを外してから静かに閉じる
+        // （onclose を外さないと再接続ループを誘発する）
+        if (this.ws) {
+          this.ws.onopen = null;
+          this.ws.onmessage = null;
+          this.ws.onerror = null;
+          this.ws.onclose = null;
+          try { this.ws.close(); } catch { /* already closed */ }
+          this.ws = null;
+        }
         // 接続時点のトークンを付与（REST と同じ localStorage を参照）。
         // ヘッダはブラウザ WebSocket で付与できないためクエリ方式
         const token = getAuthToken();
@@ -95,6 +116,7 @@ export class WSClient {
         settleReject(error);
       }
     });
+    return this.connectPromise;
   }
 
   private attemptReconnect() {

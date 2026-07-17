@@ -120,6 +120,9 @@ export const APSFRunPanel: React.FC = () => {
               onCommandChange={h.setCommand}
               provider={h.provider}
               onProviderChange={h.setProvider}
+              availableSpecialists={h.availableSpecialists}
+              specialistOverride={h.specialistOverride}
+              onSpecialistOverrideChange={h.setSpecialistOverride}
               roleProviders={h.roleProviders}
               onRoleProvidersChange={h.setRoleProviders}
               showRoleProviders={h.showRoleProviders}

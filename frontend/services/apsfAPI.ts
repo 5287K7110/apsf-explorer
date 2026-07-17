@@ -28,6 +28,20 @@ export interface RoleProviders {
   review?: 'claude' | 'codex';
 }
 
+/** GUI から明示指定する specialist（未指定はキーワード自動採点） */
+export interface ExecuteSpecialists {
+  planner?: string;
+  critic?: string;
+}
+
+export interface ApsfSpecialist {
+  code: string;
+  kind: 'planner' | 'critic';
+  file: string;
+  name: string;
+  summary: string;
+}
+
 export interface ApsfPhaseInfo {
   runId: string;
   phase: string;
@@ -186,6 +200,11 @@ export const apsfAPI = {
     );
   },
 
+  /** 選択可能な specialist 一覧（GUI の明示選択用） */
+  getSpecialists() {
+    return apiClient.get<{ specialists: ApsfSpecialist[] }>('/runs/specialists');
+  },
+
   /** 実行キューの状態（実行中 + FIFO 待機列） */
   getQueue() {
     return apiClient.get<{ running: string | null; queued: string[] }>('/runs/queue');
@@ -204,16 +223,19 @@ export const apsfAPI = {
     command: ApsfCommand,
     provider: 'claude' | 'codex',
     dryRun = false,
-    providers?: RoleProviders
+    providers?: RoleProviders,
+    specialists?: ExecuteSpecialists
   ): Promise<ApsfExecuteResponse> {
-    // providers が全キー未指定（= 既定と同じ）なら送らない（後方互換）
+    // providers / specialists が全キー未指定（= 既定と同じ）なら送らない（後方互換）
     const hasProviders = providers && Object.values(providers).some(Boolean);
+    const hasSpecialists = specialists && Object.values(specialists).some(Boolean);
     return apiClient.post<ApsfExecuteResponse>(
       `/runs/${encodeURIComponent(runId)}/execute`,
       {
         command,
         provider,
         ...(hasProviders ? { providers } : {}),
+        ...(hasSpecialists ? { specialists } : {}),
         roles: [],
         mode: 'apsf-run',
         context: dryRun ? { dryRun: true } : undefined,

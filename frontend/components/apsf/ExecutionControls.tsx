@@ -1,6 +1,6 @@
 import React from 'react';
 import { Loader2, Play, ChevronDown, ChevronRight } from 'lucide-react';
-import { ApsfCommand, RoleProviders } from '../../services/apsfAPI';
+import { ApsfCommand, RoleProviders, ExecuteSpecialists, ApsfSpecialist } from '../../services/apsfAPI';
 
 interface Props {
   command: ApsfCommand;
@@ -8,6 +8,9 @@ interface Props {
   provider: 'claude' | 'codex';
   onProviderChange: (v: 'claude' | 'codex') => void;
   roleProviders: RoleProviders;
+  availableSpecialists: ApsfSpecialist[];
+  specialistOverride: ExecuteSpecialists;
+  onSpecialistOverrideChange: (v: ExecuteSpecialists) => void;
   onRoleProvidersChange: (v: RoleProviders) => void;
   showRoleProviders: boolean;
   onShowRoleProvidersChange: (v: boolean) => void;
@@ -29,6 +32,7 @@ const ROLE_LABELS: { key: keyof RoleProviders; label: string }[] = [
 export const ExecutionControls: React.FC<Props> = ({
   command, onCommandChange, provider, onProviderChange,
   roleProviders, onRoleProvidersChange, showRoleProviders, onShowRoleProvidersChange,
+  availableSpecialists, specialistOverride, onSpecialistOverrideChange,
   dryRun, onDryRunChange, selectedActive, submitting,
   onExecute, queueState, selected,
 }) => (
@@ -108,6 +112,39 @@ export const ExecutionControls: React.FC<Props> = ({
             </select>
           </label>
         ))}
+      </div>
+    )}
+    {showRoleProviders && availableSpecialists.length > 0 && (
+      <div className="flex items-center gap-4 pl-2 text-xs text-slate-400 flex-wrap" data-testid="apsf-specialists">
+        {([
+          { key: 'planner' as const, label: 'Planner' },
+          { key: 'critic' as const, label: 'Critic' },
+        ]).map(({ key, label }) => (
+          <label key={key} className="flex items-center gap-1">
+            <span className="w-14">{label}:</span>
+            <select
+              value={specialistOverride[key] || ''}
+              onChange={(e) =>
+                onSpecialistOverrideChange({
+                  ...specialistOverride,
+                  [key]: e.target.value || undefined,
+                })
+              }
+              className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 max-w-[280px]"
+              data-testid={`apsf-specialist-${key}`}
+            >
+              <option value="">Auto（キーワード採点）</option>
+              {availableSpecialists
+                .filter((sp) => sp.kind === key)
+                .map((sp) => (
+                  <option key={sp.code} value={sp.code} title={sp.summary}>
+                    {sp.code} {sp.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+        ))}
+        <span className="text-slate-600">Specialist（未指定は自動選択）</span>
       </div>
     )}
     {!dryRun && (

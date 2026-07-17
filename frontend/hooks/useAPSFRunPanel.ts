@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision, ApsfExecutionMeta,
-  RoleProviders,
+  RoleProviders, ExecuteSpecialists, ApsfSpecialist,
 } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
 
@@ -27,6 +27,9 @@ export function useAPSFRunPanel() {
   const [provider, setProvider] = useState<'claude' | 'codex'>('claude');
   const [roleProviders, setRoleProviders] = useState<RoleProviders>({});
   const [showRoleProviders, setShowRoleProviders] = useState(false);
+  // Specialist の明示選択（未指定はキーワード自動採点 = Auto）
+  const [availableSpecialists, setAvailableSpecialists] = useState<ApsfSpecialist[]>([]);
+  const [specialistOverride, setSpecialistOverride] = useState<ExecuteSpecialists>({});
   const [dryRun, setDryRun] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
@@ -88,6 +91,10 @@ export function useAPSFRunPanel() {
 
   useEffect(() => {
     loadRuns();
+    // specialist 一覧は起動時に一度だけ（失敗しても Auto 選択で運用できる）
+    apsfAPI.getSpecialists()
+      .then((res) => setAvailableSpecialists(res.specialists))
+      .catch(() => { /* best-effort */ });
   }, [loadRuns]);
 
   // キュー状態: マウント時に取得 + canonical queue イベントでライブ更新
@@ -241,9 +248,12 @@ export function useAPSFRunPanel() {
       : '';
     appendLog('info', `実行要求: ${command} (provider=${provider}${rpSummary}${dryRun ? ', DryRun' : ''})`);
     try {
+      // specialist 指定は「役割別」トグルが開いている時のみ有効（providers と同じ流儀）
+      const hasSpecialists = showRoleProviders && Object.values(specialistOverride).some(Boolean);
       await apsfAPI.execute(
         selected, command, provider, dryRun,
-        hasRoleProviders ? roleProviders : undefined
+        hasRoleProviders ? roleProviders : undefined,
+        hasSpecialists ? specialistOverride : undefined
       );
     } catch (e) {
       appendLog('error', e instanceof Error ? e.message : 'execute request failed');
@@ -398,6 +408,7 @@ export function useAPSFRunPanel() {
     // Execution
     command, setCommand, provider, setProvider,
     roleProviders, setRoleProviders, showRoleProviders, setShowRoleProviders,
+    availableSpecialists, specialistOverride, setSpecialistOverride,
     dryRun, setDryRun,
     submitting, selectedActive, handleExecute,
     // Queue

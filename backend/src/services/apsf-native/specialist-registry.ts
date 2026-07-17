@@ -318,6 +318,40 @@ function resolveSpecialist(
   };
 }
 
+/** GUI の明示選択用の specialist 一覧エントリ */
+export interface AvailableSpecialist {
+  code: string;
+  kind: 'planner' | 'critic';
+  file: string;
+  name: string;
+  summary: string;
+}
+
+/**
+ * 選択可能な specialist の一覧（frameworkRoot に実在するもののみ）。
+ * summary は各定義ファイルの ## Role 直下の最初の行。
+ */
+export function listAvailableSpecialists(frameworkRoot: string): AvailableSpecialist[] {
+  const entries: AvailableSpecialist[] = [];
+  const collect = (map: Record<string, string>, kind: 'planner' | 'critic') => {
+    for (const [code, rel] of Object.entries(map)) {
+      const p = path.join(frameworkRoot, rel);
+      let summary = '';
+      try {
+        const src = fs.readFileSync(p, 'utf-8');
+        const m = src.match(/##\s*Role\s*\r?\n+\s*([^\r\n#].*)/);
+        if (m) summary = m[1].trim().slice(0, 160);
+      } catch {
+        continue; // 定義ファイルが無い code は一覧に出さない
+      }
+      entries.push({ code, kind, file: rel, name: path.basename(rel, '.md'), summary });
+    }
+  };
+  collect(PTYPE_TO_SPECIALIST, 'planner');
+  collect(CTYPE_TO_SPECIALIST, 'critic');
+  return entries.sort((a, b) => a.code.localeCompare(b.code));
+}
+
 export function resolvePlannerSpecialist(
   goalText: string,
   assignmentText: string,

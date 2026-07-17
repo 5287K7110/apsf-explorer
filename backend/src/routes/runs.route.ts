@@ -13,7 +13,9 @@ import { workdirGitDiff } from '../services/apsf-native/workdir-git.js';
 import {
   PTYPE_TO_SPECIALIST,
   CTYPE_TO_SPECIALIST,
+  listAvailableSpecialists,
 } from '../services/apsf-native/specialist-registry.js';
+import { resolveFrameworkRoot } from '../services/apsf-native/content-root.js';
 import { proposeSplit, type SplitProposal } from '../services/split-planner.js';
 import { PhaseDetector } from '../services/apsf-native/phase-detector.js';
 import { type ExecutionMode } from '../types/execution-mode.js';
@@ -151,6 +153,21 @@ router.post('/:id/cancel', (req: Request, res: Response) => {
  */
 router.get('/queue', (req: Request, res: Response) => {
   res.json(apsfRun.getQueueState());
+});
+
+/**
+ * GET /api/runs/specialists
+ * GUI の明示選択用に、選択可能な specialist 一覧を返す
+ */
+router.get('/specialists', (req: Request, res: Response) => {
+  try {
+    const frameworkRoot = resolveFrameworkRoot(process.env.APSF_ROOT || '');
+    res.json({ specialists: listAvailableSpecialists(frameworkRoot) });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
 });
 
 /**
