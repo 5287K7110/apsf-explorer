@@ -77,6 +77,7 @@ export const APSFRunPanel: React.FC = () => {
               fileToWrite={h.fileToWrite}
               nextRole={h.nextRole}
               advisory={h.advisory}
+              specialistSelection={h.specialistSelection}
               judgeReason={h.judgeReason}
               onJudgeReasonChange={h.setJudgeReason}
               judging={h.judging}

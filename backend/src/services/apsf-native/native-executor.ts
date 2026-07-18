@@ -260,13 +260,18 @@ export class NativeApsfExecutor extends EventEmitter {
   }
 
   /** フェーズプロンプトの組み立て（TS ネイティブ・renderer parity 検証済み） */
-  private getPrompt(runId: string, specialists?: ExecuteSpecialists): { prompt: string; specialistNote: string | null } {
+  private getPrompt(runId: string, specialists?: ExecuteSpecialists): {
+    prompt: string;
+    specialistNote: string | null;
+    specialist: import('./prompt-builder.js').SpecialistSummary | undefined;
+  } {
     const runDir = resolveRunDir(this.apsfRoot, runId);
     if (!runDir) throw new Error(`Run not found: ${runId}`);
     const built = buildPhasePrompt(runDir, resolveFrameworkRoot(this.apsfRoot), { specialists });
     const s = built.specialist;
     return {
       prompt: built.prompt,
+      specialist: s,
       // 例: [native] specialist: Critic C-08 (framework/agents/critics/puzzle-difficulty-critic.md, inferred — scope hits: ...)
       specialistNote: s
         ? `[native] specialist: ${s.kind} ${s.ptype}${s.file ? ` (${s.file})` : ''} — ${s.mode}: ${s.reason}`
@@ -525,9 +530,12 @@ export class NativeApsfExecutor extends EventEmitter {
       phase: info.phase,
       provider: effectiveProvider,
     });
-    const { prompt, specialistNote } = this.getPrompt(runId, specialists);
+    const { prompt, specialistNote, specialist } = this.getPrompt(runId, specialists);
     if (specialistNote) {
-      this.progress(runId, specialistNote, { phase: info.phase });
+      this.progress(runId, specialistNote, {
+        phase: info.phase,
+        ...(specialist ? { specialist } : {}),
+      });
     }
 
     if (dryRun) {

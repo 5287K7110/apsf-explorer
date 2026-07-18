@@ -273,6 +273,77 @@ function loadSpecialistContent(
   return { path: p, content: fs.readFileSync(p, 'utf-8').trim() };
 }
 
+function toRelFrameworkPath(frameworkRoot: string, absolutePath: string): string {
+  return path.relative(frameworkRoot, absolutePath).split(path.sep).join('/');
+}
+
+function usedCodeNumbers(map: Record<string, string>, prefix: string): Set<number> {
+  const nums = new Set<number>();
+  for (const code of Object.keys(map)) {
+    const normalized = normalizeSpecialistCode(code);
+    if (!normalized.startsWith(`${prefix}-`)) continue;
+    nums.add(Number(normalized.slice(2)));
+  }
+  return nums;
+}
+
+function nextAvailableCode(prefix: string, used: Set<number>): string {
+  for (let n = 1; n <= 99; n++) {
+    if (used.has(n)) continue;
+    used.add(n);
+    return `${prefix}-${String(n).padStart(2, '0')}`;
+  }
+  throw new Error(`No available ${prefix}-NN specialist codes`);
+}
+
+function buildEffectiveSpecialistMap(
+  frameworkRoot: string,
+  baseMap: Record<string, string>,
+  prefix: 'P' | 'C',
+  subdir: 'planners' | 'critics'
+): Record<string, string> {
+  const merged: Record<string, string> = { ...baseMap };
+  const staticRelPaths = new Set(Object.values(baseMap).map((rel) => rel.split(path.sep).join('/')));
+  const used = usedCodeNumbers(merged, prefix);
+  const agentsDir = path.join(frameworkRoot, 'framework', 'agents', subdir);
+
+  let files: fs.Dirent[];
+  try {
+    files = fs.readdirSync(agentsDir, { withFileTypes: true });
+  } catch {
+    return merged;
+  }
+
+  for (const entry of files
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md'))
+    .sort((a, b) => a.name.localeCompare(b.name))) {
+    const rel = toRelFrameworkPath(frameworkRoot, path.join(agentsDir, entry.name));
+    if (staticRelPaths.has(rel)) continue;
+    const code = nextAvailableCode(prefix, used);
+    merged[code] = rel;
+  }
+
+  return merged;
+}
+
+export function plannerSpecialistMap(frameworkRoot: string): Record<string, string> {
+  return buildEffectiveSpecialistMap(frameworkRoot, PTYPE_TO_SPECIALIST, 'P', 'planners');
+}
+
+export function criticSpecialistMap(frameworkRoot: string): Record<string, string> {
+  return buildEffectiveSpecialistMap(frameworkRoot, CTYPE_TO_SPECIALIST, 'C', 'critics');
+}
+
+export function availableSpecialistCodes(
+  frameworkRoot: string,
+  kind: 'planner' | 'critic'
+): string[] {
+  const map = kind === 'planner'
+    ? plannerSpecialistMap(frameworkRoot)
+    : criticSpecialistMap(frameworkRoot);
+  return Object.keys(map).sort();
+}
+
 function resolveSpecialist(
   goalText: string,
   assignmentText: string,
@@ -347,8 +418,8 @@ export function listAvailableSpecialists(frameworkRoot: string): AvailableSpecia
       entries.push({ code, kind, file: rel, name: path.basename(rel, '.md'), summary });
     }
   };
-  collect(PTYPE_TO_SPECIALIST, 'planner');
-  collect(CTYPE_TO_SPECIALIST, 'critic');
+  collect(plannerSpecialistMap(frameworkRoot), 'planner');
+  collect(criticSpecialistMap(frameworkRoot), 'critic');
   return entries.sort((a, b) => a.code.localeCompare(b.code));
 }
 
@@ -357,7 +428,7 @@ export function resolvePlannerSpecialist(
   assignmentText: string,
   frameworkRoot: string
 ): SpecialistSelection {
-  return resolveSpecialist(goalText, assignmentText, frameworkRoot, 'P', PTYPE_TO_SPECIALIST, 'explicit Primary P-TYPE');
+  return resolveSpecialist(goalText, assignmentText, frameworkRoot, 'P', plannerSpecialistMap(frameworkRoot), 'explicit Primary P-TYPE');
 }
 
 export function resolveCriticSpecialist(
@@ -365,5 +436,5 @@ export function resolveCriticSpecialist(
   assignmentText: string,
   frameworkRoot: string
 ): SpecialistSelection {
-  return resolveSpecialist(goalText, assignmentText, frameworkRoot, 'C', CTYPE_TO_SPECIALIST, 'explicit Primary C-TYPE');
+  return resolveSpecialist(goalText, assignmentText, frameworkRoot, 'C', criticSpecialistMap(frameworkRoot), 'explicit Primary C-TYPE');
 }

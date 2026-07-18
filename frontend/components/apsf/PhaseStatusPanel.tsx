@@ -1,6 +1,6 @@
 import React from 'react';
-import { CircleDot, Loader2, PenLine, RefreshCw, Scale } from 'lucide-react';
-import { ApsfAdvisory, ApsfJudgeDecision } from '../../services/apsfAPI';
+import { AlertTriangle, CircleDot, Loader2, PenLine, Plus, RefreshCw, Scale } from 'lucide-react';
+import { ApsfAdvisory, ApsfJudgeDecision, SpecialistSelectionInfo } from '../../services/apsfAPI';
 import { isHumanPhase } from '../../utils/phases';
 
 function phaseColor(phase: string): string {
@@ -18,6 +18,7 @@ interface Props {
   fileToWrite: string;
   nextRole: string;
   advisory: ApsfAdvisory | null;
+  specialistSelection: SpecialistSelectionInfo | null;
   judgeReason: string;
   onJudgeReasonChange: (v: string) => void;
   judging: boolean;
@@ -30,7 +31,7 @@ interface Props {
 
 export const PhaseStatusPanel: React.FC<Props> = ({
   selected, phase, phaseLoading, phaseStatus, lastError,
-  fileToWrite, nextRole, advisory,
+  fileToWrite, nextRole, advisory, specialistSelection,
   judgeReason, onJudgeReasonChange, judging,
   quickComplete, onQuickCompleteChange,
   onDetectPhase, onOpenEditor, onJudgeDecision,
@@ -82,6 +83,27 @@ export const PhaseStatusPanel: React.FC<Props> = ({
         {lastError && (
           <p className="text-xs text-red-400/80 font-mono break-all">{lastError}</p>
         )}
+      </div>
+    )}
+
+    {/* Specialist unresolved 警告 */}
+    {specialistSelection?.mode === 'unresolved' && (
+      <div className="mt-3 p-3 bg-amber-950/50 border border-amber-800 rounded-lg" data-testid="apsf-specialist-unresolved">
+        <div className="flex items-center gap-2 text-xs font-semibold text-amber-300 mb-1">
+          <AlertTriangle size={12} />
+          適合する {specialistSelection.kind === 'Planner' ? 'Planner' : 'Critic'} Specialist がありません
+        </div>
+        <p className="text-xs text-amber-400/80 mb-2">
+          キーワード採点で該当なし — 汎用プロンプトで実行されます
+        </p>
+        <button
+          disabled
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700/40 text-amber-200 text-xs font-semibold rounded transition opacity-60 cursor-not-allowed"
+          data-testid="apsf-generate-specialist"
+          title="Specialist 生成機能は後続タスクで実装予定です"
+        >
+          <Plus size={12} /> Specialist を生成…
+        </button>
       </div>
     )}
 

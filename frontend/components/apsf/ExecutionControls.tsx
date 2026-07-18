@@ -144,7 +144,7 @@ export const ExecutionControls: React.FC<Props> = ({
             </select>
           </label>
         ))}
-        <span className="text-slate-600">Specialist（未指定は自動選択）</span>
+        <span className="text-slate-600">Specialist（未指定は自動選択 — 該当なしの場合は生成を提案します）</span>
       </div>
     )}
     {!dryRun && (

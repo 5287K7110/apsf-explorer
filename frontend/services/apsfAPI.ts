@@ -91,6 +91,16 @@ export interface SplitProposal {
   task: string;
 }
 
+/** WebSocket progress イベントで返る specialist 選択結果 */
+export interface SpecialistSelectionInfo {
+  kind: 'Planner' | 'Critic';
+  ptype: string;
+  file: string | null;
+  mode: 'explicit' | 'inferred' | 'unresolved';
+  score: number;
+  reason: string;
+}
+
 export type ApsfJudgeDecision = 'Accept' | 'Return to Build' | 'Return to Plan';
 
 export interface ApsfJudgeResult {

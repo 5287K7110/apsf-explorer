@@ -201,6 +201,7 @@ export interface SpecialistSummary {
   ptype: string;
   file: string | null;
   mode: string;
+  score: number;
   reason: string;
 }
 
@@ -220,6 +221,7 @@ function specialistSummary(
       ? path.relative(frameworkRoot, selection.specialistPath).split(path.sep).join('/')
       : null,
     mode: selection.mode,
+    score: selection.score,
     reason: selection.reason,
   };
 }

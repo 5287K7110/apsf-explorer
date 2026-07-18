@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   apsfAPI, ApsfCommand, ApsfAdvisory, ApsfJudgeDecision, ApsfExecutionMeta,
-  RoleProviders, ExecuteSpecialists, ApsfSpecialist,
+  RoleProviders, ExecuteSpecialists, ApsfSpecialist, SpecialistSelectionInfo,
 } from '../services/apsfAPI';
 import { wsClient } from '../utils/wsClient';
 
@@ -30,6 +30,8 @@ export function useAPSFRunPanel() {
   // Specialist の明示選択（未指定はキーワード自動採点 = Auto）
   const [availableSpecialists, setAvailableSpecialists] = useState<ApsfSpecialist[]>([]);
   const [specialistOverride, setSpecialistOverride] = useState<ExecuteSpecialists>({});
+  // 直近の実行で返った specialist 選択結果（unresolved 検出用）
+  const [specialistSelection, setSpecialistSelection] = useState<SpecialistSelectionInfo | null>(null);
   const [dryRun, setDryRun] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
@@ -163,6 +165,7 @@ export function useAPSFRunPanel() {
       setTranscriptError(null);
       setExecutionsError(null);
       setExistingFiles([]);
+      setSpecialistSelection(null);
       detectPhase(selected);
       loadExecutions(selected);
     }
@@ -203,6 +206,10 @@ export function useAPSFRunPanel() {
             ? String(d?.error ?? 'unknown error')
             : String(d?.message ?? '').trimEnd();
       if (text) appendLog(kind, text);
+      // specialist 選択結果を抽出（progress イベントの data.specialist）
+      if (kind === 'progress' && d?.specialist) {
+        setSpecialistSelection(d.specialist as SpecialistSelectionInfo);
+      }
       if (kind === 'complete' || kind === 'error') {
         detectPhase(selectedRef.current);
         loadExecutions(selectedRef.current);
@@ -408,7 +415,7 @@ export function useAPSFRunPanel() {
     // Execution
     command, setCommand, provider, setProvider,
     roleProviders, setRoleProviders, showRoleProviders, setShowRoleProviders,
-    availableSpecialists, specialistOverride, setSpecialistOverride,
+    availableSpecialists, specialistOverride, setSpecialistOverride, specialistSelection,
     dryRun, setDryRun,
     submitting, selectedActive, handleExecute,
     // Queue

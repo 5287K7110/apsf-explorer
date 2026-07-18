@@ -11,8 +11,7 @@ import { authenticateToken } from '../middleware/auth.middleware.js';
 import { type ExecuteRequest, type StreamEvent } from '../types/index.js';
 import { workdirGitDiff } from '../services/apsf-native/workdir-git.js';
 import {
-  PTYPE_TO_SPECIALIST,
-  CTYPE_TO_SPECIALIST,
+  availableSpecialistCodes,
   listAvailableSpecialists,
 } from '../services/apsf-native/specialist-registry.js';
 import { resolveFrameworkRoot } from '../services/apsf-native/content-root.js';
@@ -57,9 +56,10 @@ function validateExecuteSpecialists(specialists: unknown): string | null {
   }
 
   const input = specialists as { planner?: unknown; critic?: unknown };
+  const frameworkRoot = resolveFrameworkRoot(process.env.APSF_ROOT || '');
   const checks = [
-    { role: 'planner', value: input.planner, valid: Object.keys(PTYPE_TO_SPECIALIST).sort() },
-    { role: 'critic', value: input.critic, valid: Object.keys(CTYPE_TO_SPECIALIST).sort() },
+    { role: 'planner', value: input.planner, valid: availableSpecialistCodes(frameworkRoot, 'planner') },
+    { role: 'critic', value: input.critic, valid: availableSpecialistCodes(frameworkRoot, 'critic') },
   ] as const;
 
   for (const check of checks) {
